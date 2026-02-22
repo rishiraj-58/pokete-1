@@ -7,7 +7,7 @@ from pokete.base.ui.notify import notifier
 
 from . import timer
 from .landscape import HighGrass, Meadow
-from .npcs import NPC
+from .npcs import NPC, Trainer
 from .settings import settings
 
 
@@ -71,6 +71,22 @@ class TreatNPCEvent(PeriodicEvent):
     def tick(self, ctx: Context, tick: int):
         if timer.time.normalized == 6 * 60:
             NPC.get("npc_28").unset_used()
+
+
+class RematchIndicatorEvent(PeriodicEvent):
+    """Periodically updates rematch indicators for trainers on the current map."""
+    max_tick = 50  # Update every 50 ticks
+    
+    def __init__(self, _map):
+        self._map = _map
+    
+    def tick(self, ctx: Context, tick: int):
+        if tick % self.max_tick == 0:
+            # Update rematch indicators for all trainers on this map
+            if hasattr(self._map, 'trainers'):
+                for trainer in self._map.trainers:
+                    if isinstance(trainer, Trainer):
+                        trainer.update_rematch_indicator()
 
 
 class NotifierEvent(PeriodicEvent):

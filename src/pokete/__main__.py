@@ -58,8 +58,10 @@ from pokete.classes.periodic_events import (
     MovingGrassEvent,
     MovingWaterEvent,
     NotifierEvent,
+    RematchIndicatorEvent,
     TreatNPCEvent,
 )
+from pokete.classes.npcs.rematch import rematch_manager, RematchManager
 from pokete.classes.poke import Poke, Stats
 from pokete.classes.pokete_care import pokete_care
 from pokete.classes.pre_game import PreGameMap
@@ -343,6 +345,7 @@ def _game(_map: PlayMap, figure: Figure):
             MovingGrassEvent(_map),
             MovingWaterEvent(_map),
             *([TreatNPCEvent()] if modeProvider.mode == Mode.SINGLE else []),
+            RematchIndicatorEvent(_map),
             NotifierEvent(),
             single_event_periodic_event,
         ]
@@ -489,6 +492,15 @@ def main():
         )
         timer.time.set(session_info.get("time", 0))
         _ev.set_emit_fn(timer.time.emit_input)
+
+        # Load rematch data
+        rematch_data = session_info.get(
+            "rematches",
+            {"trainer_data": {}, "completed_rematches": []}
+        )
+        loaded_rematch_manager = RematchManager.from_dict(rematch_data)
+        rematch_manager._trainer_data = loaded_rematch_manager._trainer_data
+        rematch_manager._completed_rematches = loaded_rematch_manager._completed_rematches
 
         # Achievements
         achievements.set_achieved(session_info.get("achievements", []))

@@ -10,6 +10,7 @@ from . import timer
 from .achievements import achievements
 from .multiplayer.connector import com_service
 from .multiplayer.modeprovider import Mode, modeProvider
+from .npcs.rematch import rematch_manager
 from .pokete_care import pokete_care
 from .settings import settings
 
@@ -51,6 +52,7 @@ def save(figure):
         "used_npcs": list(dict.fromkeys(figure.used_npcs)),
         "pokete_care": pokete_care.dict(),
         "time": timer.time.time,
+        "rematches": rematch_manager.to_dict(),
     }
     with open(release.SAVEPATH / "pokete.json", "w+") as file:
         # writes the data to the save file in a nice format
@@ -92,6 +94,10 @@ def read_save():
             "poke": None,
         },
         "time": 0,
+        "rematches": {
+            "trainer_data": {},
+            "completed_rematches": [],
+        },
     }
 
     save_file = release.SAVEPATH / "pokete.json"
