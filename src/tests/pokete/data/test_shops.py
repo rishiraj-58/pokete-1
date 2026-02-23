@@ -1,6 +1,19 @@
-import unittest
+"""Unit tests for shop data configuration."""
 
-from pokete.data.shops import shops
+import unittest
+import sys
+import os
+
+# Add the pokete source to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'pokete'))
+
+# Import shops directly
+import importlib.util
+shops_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'pokete', 'data', 'shops.py')
+spec = importlib.util.spec_from_file_location("shops", shops_path)
+shops_module = importlib.util.module_from_spec(spec)
+exec(compile(open(shops_path).read(), shops_path, 'exec'), shops_module.__dict__)
+shops = shops_module.shops
 
 
 class TestShopsData(unittest.TestCase):
@@ -47,12 +60,12 @@ class TestShopsData(unittest.TestCase):
                 f"Shop '{shop_name}' should have at least one text",
             )
 
-    def test_shop_items_is_list(self):
+    def test_shop_items_is_dict(self):
         for shop_name, shop_data in shops.items():
             self.assertIsInstance(
                 shop_data["items"],
-                list,
-                f"Shop '{shop_name}' items should be a list",
+                dict,
+                f"Shop '{shop_name}' items should be a dict",
             )
             self.assertGreater(
                 len(shop_data["items"]),
@@ -129,6 +142,48 @@ class TestShopsData(unittest.TestCase):
         )
 
 
+class TestShopsStockConfiguration(unittest.TestCase):
+    def test_stock_values_are_valid(self):
+        for shop_name, shop_data in shops.items():
+            for item_name, stock in shop_data["items"].items():
+                self.assertTrue(
+                    stock is None or (isinstance(stock, int) and stock >= 0),
+                    f"Shop '{shop_name}' item '{item_name}' has invalid stock: {stock}",
+                )
+
+    def test_general_store_has_unlimited_basics(self):
+        general_store = shops["general_store_clerk"]
+        unlimited_items = ["poketeball", "superball", "healing_potion"]
+        for item in unlimited_items:
+            self.assertIsNone(
+                general_store["items"].get(item),
+                f"General store '{item}' should have unlimited stock",
+            )
+
+    def test_general_store_has_limited_premium(self):
+        general_store = shops["general_store_clerk"]
+        limited_items = ["super_potion", "ap_potion"]
+        for item in limited_items:
+            stock = general_store["items"].get(item)
+            self.assertIsNotNone(
+                stock,
+                f"General store '{item}' should have limited stock",
+            )
+            self.assertGreater(
+                stock,
+                0,
+                f"General store '{item}' should have positive stock",
+            )
+
+    def test_premium_shop_has_all_limited(self):
+        premium_shop = shops["premium_shop_owner"]
+        for item_name, stock in premium_shop["items"].items():
+            self.assertIsNotNone(
+                stock,
+                f"Premium shop '{item_name}' should have limited stock",
+            )
+
+
 class TestShopsMapReferences(unittest.TestCase):
     def test_shop_maps_are_valid_strings(self):
         for shop_name, shop_data in shops.items():
@@ -154,6 +209,66 @@ class TestShopsMapReferences(unittest.TestCase):
                 0,
                 f"Shop '{shop_name}' should have a non-empty shop_name",
             )
+
+
+class TestShopsItemsValidity(unittest.TestCase):
+    VALID_ITEMS = {
+        "poketeball",
+        "superball",
+        "hyperball",
+        "healing_potion",
+        "super_potion",
+        "ap_potion",
+        "treat",
+        "shut_the_fuck_up_stone",
+    }
+
+    def test_all_shop_items_are_valid(self):
+        for shop_name, shop_data in shops.items():
+            for item in shop_data["items"].keys():
+                self.assertIn(
+                    item,
+                    self.VALID_ITEMS,
+                    f"Shop '{shop_name}' has invalid item '{item}'",
+                )
+
+
+class TestShopsTextsFormat(unittest.TestCase):
+    def test_texts_are_strings(self):
+        for shop_name, shop_data in shops.items():
+            for text in shop_data["texts"]:
+                self.assertIsInstance(
+                    text,
+                    str,
+                    f"Shop '{shop_name}' has non-string text",
+                )
+
+    def test_texts_are_not_empty(self):
+        for shop_name, shop_data in shops.items():
+            for text in shop_data["texts"]:
+                self.assertGreater(
+                    len(text.strip()),
+                    0,
+                    f"Shop '{shop_name}' has empty text",
+                )
+
+
+class TestShopsDiversity(unittest.TestCase):
+    def test_shops_have_different_items(self):
+        shop_items = [frozenset(shop["items"].keys()) for shop in shops.values()]
+        self.assertEqual(
+            len(shop_items),
+            len(set(shop_items)),
+            "Shops should have different item sets",
+        )
+
+    def test_shops_have_different_names(self):
+        shop_names = [shop["shop_name"] for shop in shops.values()]
+        self.assertEqual(
+            len(shop_names),
+            len(set(shop_names)),
+            "Shops should have unique display names",
+        )
 
 
 if __name__ == "__main__":

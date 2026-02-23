@@ -10,6 +10,7 @@ from . import timer
 from .achievements import achievements
 from .multiplayer.connector import com_service
 from .multiplayer.modeprovider import Mode, modeProvider
+from .npcs.shop_npc import ShopNPC
 from .pokete_care import pokete_care
 from .settings import settings
 
@@ -51,6 +52,7 @@ def save(figure):
         "used_npcs": list(dict.fromkeys(figure.used_npcs)),
         "pokete_care": pokete_care.dict(),
         "time": timer.time.time,
+        "shop_stock": ShopNPC.save_all_stock(),
     }
     with open(release.SAVEPATH / "pokete.json", "w+") as file:
         # writes the data to the save file in a nice format
@@ -92,6 +94,7 @@ def read_save():
             "poke": None,
         },
         "time": 0,
+        "shop_stock": {},
     }
 
     save_file = release.SAVEPATH / "pokete.json"
@@ -110,3 +113,11 @@ def read_save():
             exec(_file.read(), {"session_info": _si}, l_dict)
         _si = json.loads(json.dumps(l_dict["session_info"]))
     return _si
+
+
+def load_shop_stock(session_info: dict):
+    """Loads shop stock from session info after shops are generated"""
+    shop_stock = session_info.get("shop_stock", {})
+    if shop_stock:
+        ShopNPC.load_all_stock(shop_stock)
+        logging.info("[Save] Loaded shop stock data")

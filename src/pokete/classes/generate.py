@@ -9,6 +9,7 @@ from pokete.base.periodic_event_manager import PeriodicEvent
 from pokete.base.tss import tss
 from pokete.classes.asset_service.resources.obmaps import Obmap
 from pokete.classes.map_additions import customizers
+from pokete.data.shops import shops
 
 from . import ob_maps as obmp
 from .asset_service.resources import Map
@@ -172,13 +173,11 @@ def gen_maps(
     return maps
 
 
-def gen_obs(figure):
+def gen_obs(figure, session_info: dict | None = None):
     """Generates all objects on the maps
-    ARSG:
-        map_data: Contains map_data
-        npcs: Contains npc data
-        trainers: Contains trainers data
-        figure: Figure instance"""
+    ARGS:
+        figure: Figure instance
+        session_info: Session info dict for loading saved data"""
 
     assets = asset_service.get_assets()
 
@@ -215,13 +214,11 @@ def gen_obs(figure):
         )
 
     # Shop NPCs
-    _gen_shop_npcs()
+    _gen_shop_npcs(session_info)
 
 
-def _gen_shop_npcs():
+def _gen_shop_npcs(session_info: dict | None = None):
     """Generates shop NPCs from the shops data"""
-    from pokete.data.shops import shops
-
     for shop_name, shop_data in shops.items():
         if shop_data["map"] not in obmp.ob_maps:
             continue
@@ -243,6 +240,10 @@ def _gen_shop_npcs():
             shop_data["x"],
             shop_data["y"],
         )
+
+    if session_info is not None:
+        from .save import load_shop_stock
+        load_shop_stock(session_info)
 
 
 if __name__ == "__main__":

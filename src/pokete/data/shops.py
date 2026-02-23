@@ -9,7 +9,7 @@ class ShopNPCDict(TypedDict):
     x: int
     y: int
     shop_name: str
-    items: list[str]
+    items: dict[str, int | None]  # item_name -> stock (None = unlimited)
     price_multiplier: float
 
 
@@ -24,13 +24,13 @@ shops: dict[str, ShopNPCDict] = {
         "x": 15,
         "y": 8,
         "shop_name": "General Store",
-        "items": [
-            "poketeball",
-            "superball",
-            "healing_potion",
-            "super_potion",
-            "ap_potion",
-        ],
+        "items": {
+            "poketeball": None,  # Unlimited stock
+            "superball": None,
+            "healing_potion": None,
+            "super_potion": 10,  # Limited stock
+            "ap_potion": 5,
+        },
         "price_multiplier": 1.0,
     },
     "premium_shop_owner": {
@@ -43,11 +43,11 @@ shops: dict[str, ShopNPCDict] = {
         "x": 25,
         "y": 10,
         "shop_name": "Premium Shop",
-        "items": [
-            "superball",
-            "super_potion",
-            "ap_potion",
-        ],
+        "items": {
+            "superball": 20,  # Limited stock
+            "super_potion": 15,
+            "ap_potion": 3,
+        },
         "price_multiplier": 0.8,
     },
 }

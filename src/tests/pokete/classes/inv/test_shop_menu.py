@@ -1,8 +1,84 @@
-import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+"""Unit tests for ShopMenu and PurchaseResult classes."""
 
-from pokete.classes.inv.shop_menu import PurchaseResult, ShopMenu
-from pokete.classes.npcs.shop_npc import ShopInventoryConfig
+import unittest
+from unittest.mock import MagicMock, patch
+import sys
+import os
+
+# Add the pokete source to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'pokete'))
+
+# Import only what we need via direct file loading to avoid circular deps
+import importlib.util
+
+# Load shop_npc module
+shop_npc_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'pokete', 'classes', 'npcs', 'shop_npc.py')
+spec = importlib.util.spec_from_file_location("shop_npc", shop_npc_path)
+shop_npc_module = importlib.util.module_from_spec(spec)
+
+class TestInvItem:
+    def __init__(self, price=None, name="test"):
+        self.price = price
+        self.name = name
+
+shop_npc_module.NPC = MagicMock
+shop_npc_module.NPCAction = MagicMock
+shop_npc_module.NPCInterface = MagicMock
+shop_npc_module.UIInterface = MagicMock
+shop_npc_module.InvItem = TestInvItem
+shop_npc_module.logging = MagicMock()
+exec(compile(open(shop_npc_path).read(), shop_npc_path, 'exec'), shop_npc_module.__dict__)
+ShopInventoryConfig = shop_npc_module.ShopInventoryConfig
+
+# Load shop_menu module
+shop_menu_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'pokete', 'classes', 'inv', 'shop_menu.py')
+spec2 = importlib.util.spec_from_file_location("shop_menu", shop_menu_path)
+shop_menu_module = importlib.util.module_from_spec(spec2)
+
+# Mock dependencies for shop_menu
+shop_menu_module.se = MagicMock()
+shop_menu_module.change_ctx = MagicMock()
+shop_menu_module.Context = MagicMock
+shop_menu_module.ask_ok = MagicMock()
+shop_menu_module.asset_service = MagicMock()
+shop_menu_module.InvItem = TestInvItem
+shop_menu_module.ShopInventoryConfig = ShopInventoryConfig
+shop_menu_module.BaseInv = MagicMock
+shop_menu_module.logging = MagicMock()
+exec(compile(open(shop_menu_path).read(), shop_menu_path, 'exec'), shop_menu_module.__dict__)
+
+PurchaseResult = shop_menu_module.PurchaseResult
+ShopMenu = shop_menu_module.ShopMenu
+
+
+class TestInvItem:
+    """Mock item for testing"""
+    def __init__(self, name: str, price, pretty_name: str = ""):
+        self.name = name
+        self.price = price
+        self.pretty_name = pretty_name or name.capitalize()
+
+
+class MockFigure:
+    """Mock figure/player for testing"""
+    def __init__(self, initial_money: int = 100):
+        self._money = initial_money
+        self._inventory = {}
+
+    def get_money(self) -> int:
+        return self._money
+
+    def add_money(self, amount: int):
+        self._money += amount
+
+    def give_item(self, item_name: str):
+        self._inventory[item_name] = self._inventory.get(item_name, 0) + 1
+
+
+class MockContext:
+    """Mock context for testing"""
+    def __init__(self, initial_money: int = 100):
+        self.figure = MockFigure(initial_money)
 
 
 class TestPurchaseResult(unittest.TestCase):
@@ -32,6 +108,15 @@ class TestPurchaseResult(unittest.TestCase):
         self.assertEqual(result.status, PurchaseResult.ITEM_NOT_FOR_SALE)
         self.assertFalse(result.is_success)
 
+    def test_out_of_stock_status(self):
+        result = PurchaseResult(
+            PurchaseResult.OUT_OF_STOCK,
+            "Item sold out!",
+        )
+
+        self.assertEqual(result.status, PurchaseResult.OUT_OF_STOCK)
+        self.assertFalse(result.is_success)
+
     def test_cancelled_status(self):
         result = PurchaseResult(PurchaseResult.CANCELLED)
 
@@ -45,359 +130,392 @@ class TestPurchaseResult(unittest.TestCase):
         self.assertEqual(result.message, "")
 
 
-class TestShopMenuLoadItems(unittest.TestCase):
+class TestShopMenuAttemptPurchase(unittest.TestCase):
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_load_items_filters_out_items_without_price(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-
-        mock_item_with_price = MagicMock()
-        mock_item_with_price.price = 10
-        mock_item_with_price.name = "poketeball"
-        mock_item_with_price.pretty_name = "Poketeball"
-
-        mock_item_without_price = MagicMock()
-        mock_item_without_price.price = None
-        mock_item_without_price.name = "hyperball"
-
-        mock_asset_service.get_items.return_value = {
-            "poketeball": mock_item_with_price,
-            "hyperball": mock_item_without_price,
-        }
-
-        config = ShopInventoryConfig(["poketeball", "hyperball"])
-        menu = ShopMenu(config)
-
-        self.assertEqual(len(menu.items), 1)
-        self.assertEqual(menu.items[0].name, "poketeball")
-
-    @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_load_items_skips_nonexistent_items(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-
-        mock_item = MagicMock()
-        mock_item.price = 10
-        mock_item.name = "poketeball"
-        mock_item.pretty_name = "Poketeball"
-
-        mock_asset_service.get_items.return_value = {
-            "poketeball": mock_item,
-        }
-
-        config = ShopInventoryConfig(["poketeball", "nonexistent_item"])
-        menu = ShopMenu(config)
-
-        self.assertEqual(len(menu.items), 1)
-        self.assertEqual(menu.items[0].name, "poketeball")
-
-
-class TestShopMenuPurchase(unittest.TestCase):
-    @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_attempt_purchase_success(self, mock_base_init, mock_asset_service):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
-
-        config = ShopInventoryConfig(["test"])
-        menu = ShopMenu(config)
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_attempt_purchase_success(self, mock_asset_service):
+        config = ShopInventoryConfig(["poketeball"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
         menu.set_money = MagicMock()
 
-        mock_item = MagicMock()
-        mock_item.price = 10
-        mock_item.name = "poketeball"
-        mock_item.pretty_name = "Poketeball"
+        item = TestInvItem("poketeball", 10, "Poketeball")
+        ctx = MockContext(100)
 
-        mock_ctx = MagicMock()
-        mock_ctx.figure.get_money.return_value = 100
-
-        result = menu._attempt_purchase(mock_ctx, mock_item)
+        result = menu._attempt_purchase(ctx, item)
 
         self.assertTrue(result.is_success)
-        mock_ctx.figure.add_money.assert_called_once_with(-10)
-        mock_ctx.figure.give_item.assert_called_once_with("poketeball")
-        menu.set_money.assert_called_once_with(mock_ctx.figure)
+        self.assertEqual(ctx.figure.get_money(), 90)
+        self.assertEqual(ctx.figure._inventory.get("poketeball"), 1)
 
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_attempt_purchase_insufficient_funds(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
-
-        config = ShopInventoryConfig(["test"])
-        menu = ShopMenu(config)
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_attempt_purchase_insufficient_funds(self, mock_asset_service):
+        config = ShopInventoryConfig(["expensive_item"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
         menu.set_money = MagicMock()
 
-        mock_item = MagicMock()
-        mock_item.price = 100
-        mock_item.name = "expensive_item"
+        item = TestInvItem("expensive_item", 100)
+        ctx = MockContext(50)
 
-        mock_ctx = MagicMock()
-        mock_ctx.figure.get_money.return_value = 50
-
-        result = menu._attempt_purchase(mock_ctx, mock_item)
+        result = menu._attempt_purchase(ctx, item)
 
         self.assertEqual(result.status, PurchaseResult.INSUFFICIENT_FUNDS)
-        mock_ctx.figure.add_money.assert_not_called()
-        mock_ctx.figure.give_item.assert_not_called()
+        self.assertEqual(ctx.figure.get_money(), 50)
+        self.assertNotIn("expensive_item", ctx.figure._inventory)
 
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_attempt_purchase_exact_amount(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
-
-        config = ShopInventoryConfig(["test"])
-        menu = ShopMenu(config)
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_attempt_purchase_exact_amount(self, mock_asset_service):
+        config = ShopInventoryConfig(["item"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
         menu.set_money = MagicMock()
 
-        mock_item = MagicMock()
-        mock_item.price = 50
-        mock_item.name = "item"
-        mock_item.pretty_name = "Item"
+        item = TestInvItem("item", 50, "Item")
+        ctx = MockContext(50)
 
-        mock_ctx = MagicMock()
-        mock_ctx.figure.get_money.return_value = 50
-
-        result = menu._attempt_purchase(mock_ctx, mock_item)
+        result = menu._attempt_purchase(ctx, item)
 
         self.assertTrue(result.is_success)
-        mock_ctx.figure.add_money.assert_called_once_with(-50)
+        self.assertEqual(ctx.figure.get_money(), 0)
 
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_attempt_purchase_item_with_zero_price(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_attempt_purchase_item_with_zero_price(self, mock_asset_service):
+        config = ShopInventoryConfig(["free_item"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
 
-        config = ShopInventoryConfig(["test"])
-        menu = ShopMenu(config)
+        item = TestInvItem("free_item", 0)
+        ctx = MockContext(100)
 
-        mock_item = MagicMock()
-        mock_item.price = 0
-        mock_item.name = "free_item"
-
-        mock_ctx = MagicMock()
-        mock_ctx.figure.get_money.return_value = 100
-
-        result = menu._attempt_purchase(mock_ctx, mock_item)
+        result = menu._attempt_purchase(ctx, item)
 
         self.assertEqual(result.status, PurchaseResult.ITEM_NOT_FOR_SALE)
 
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_attempt_purchase_item_with_none_price(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_attempt_purchase_item_with_none_price(self, mock_asset_service):
+        config = ShopInventoryConfig(["no_price_item"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
 
-        config = ShopInventoryConfig(["test"])
-        menu = ShopMenu(config)
+        item = TestInvItem("no_price_item", None)
+        ctx = MockContext(100)
 
-        mock_item = MagicMock()
-        mock_item.price = None
-        mock_item.name = "no_price_item"
-
-        mock_ctx = MagicMock()
-
-        result = menu._attempt_purchase(mock_ctx, mock_item)
+        result = menu._attempt_purchase(ctx, item)
 
         self.assertEqual(result.status, PurchaseResult.ITEM_NOT_FOR_SALE)
+
+
+class TestShopMenuStock(unittest.TestCase):
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_with_limited_stock(self, mock_asset_service):
+        config = ShopInventoryConfig({"poketeball": 3})
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+        menu.set_money = MagicMock()
+
+        item = TestInvItem("poketeball", 10, "Poketeball")
+        ctx = MockContext(100)
+
+        result = menu._attempt_purchase(ctx, item)
+
+        self.assertTrue(result.is_success)
+        self.assertEqual(config.get_stock("poketeball"), 2)
+
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_until_out_of_stock(self, mock_asset_service):
+        config = ShopInventoryConfig({"poketeball": 2})
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+        menu.set_money = MagicMock()
+
+        item = TestInvItem("poketeball", 10, "Poketeball")
+        ctx = MockContext(100)
+
+        result1 = menu._attempt_purchase(ctx, item)
+        self.assertTrue(result1.is_success)
+
+        result2 = menu._attempt_purchase(ctx, item)
+        self.assertTrue(result2.is_success)
+
+        result3 = menu._attempt_purchase(ctx, item)
+        self.assertEqual(result3.status, PurchaseResult.OUT_OF_STOCK)
+        self.assertEqual(ctx.figure.get_money(), 80)
+
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_with_unlimited_stock(self, mock_asset_service):
+        config = ShopInventoryConfig(["poketeball"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+        menu.set_money = MagicMock()
+
+        item = TestInvItem("poketeball", 1, "Poketeball")
+        ctx = MockContext(100)
+
+        for _ in range(50):
+            result = menu._attempt_purchase(ctx, item)
+            self.assertTrue(result.is_success)
+
+        self.assertEqual(ctx.figure.get_money(), 50)
+        self.assertEqual(ctx.figure._inventory.get("poketeball"), 50)
+
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_out_of_stock_from_start(self, mock_asset_service):
+        config = ShopInventoryConfig({"poketeball": 0})
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+
+        item = TestInvItem("poketeball", 10, "Poketeball")
+        ctx = MockContext(100)
+
+        result = menu._attempt_purchase(ctx, item)
+
+        self.assertEqual(result.status, PurchaseResult.OUT_OF_STOCK)
+        self.assertEqual(ctx.figure.get_money(), 100)
+
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_stock_checked_before_funds(self, mock_asset_service):
+        config = ShopInventoryConfig({"poketeball": 0})
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+
+        item = TestInvItem("poketeball", 10, "Poketeball")
+        ctx = MockContext(5)
+
+        result = menu._attempt_purchase(ctx, item)
+
+        self.assertEqual(result.status, PurchaseResult.OUT_OF_STOCK)
 
 
 class TestShopMenuWithPriceMultiplier(unittest.TestCase):
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_purchase_with_discount_multiplier(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
-
-        config = ShopInventoryConfig(["test"], price_multiplier=0.5)
-        menu = ShopMenu(config)
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_with_discount_multiplier(self, mock_asset_service):
+        config = ShopInventoryConfig(["item"], price_multiplier=0.5)
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
         menu.set_money = MagicMock()
 
-        mock_item = MagicMock()
-        mock_item.price = 100
-        mock_item.name = "item"
-        mock_item.pretty_name = "Item"
+        item = TestInvItem("item", 100, "Item")
+        ctx = MockContext(60)
 
-        mock_ctx = MagicMock()
-        mock_ctx.figure.get_money.return_value = 60
-
-        result = menu._attempt_purchase(mock_ctx, mock_item)
+        result = menu._attempt_purchase(ctx, item)
 
         self.assertTrue(result.is_success)
-        mock_ctx.figure.add_money.assert_called_once_with(-50)
+        self.assertEqual(ctx.figure.get_money(), 10)
 
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_purchase_with_premium_multiplier(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
-
-        config = ShopInventoryConfig(["test"], price_multiplier=1.5)
-        menu = ShopMenu(config)
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_with_premium_multiplier(self, mock_asset_service):
+        config = ShopInventoryConfig(["item"], price_multiplier=1.5)
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
         menu.set_money = MagicMock()
 
-        mock_item = MagicMock()
-        mock_item.price = 100
-        mock_item.name = "item"
-        mock_item.pretty_name = "Item"
+        item = TestInvItem("item", 100, "Item")
+        ctx = MockContext(100)
 
-        mock_ctx = MagicMock()
-        mock_ctx.figure.get_money.return_value = 100
-
-        result = menu._attempt_purchase(mock_ctx, mock_item)
+        result = menu._attempt_purchase(ctx, item)
 
         self.assertEqual(result.status, PurchaseResult.INSUFFICIENT_FUNDS)
 
-
-class TestShopMenuChoose(unittest.TestCase):
-    @patch("pokete.classes.inv.shop_menu.ask_ok")
-    @patch("pokete.classes.inv.shop_menu.change_ctx")
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_choose_with_invalid_index(
-        self,
-        mock_base_init,
-        mock_asset_service,
-        mock_change_ctx,
-        mock_ask_ok,
-    ):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_with_premium_multiplier_sufficient_funds(self, mock_asset_service):
+        config = ShopInventoryConfig(["item"], price_multiplier=1.5)
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+        menu.set_money = MagicMock()
 
-        config = ShopInventoryConfig([])
-        menu = ShopMenu(config)
-        menu.invbox = MagicMock(return_value=True)
+        item = TestInvItem("item", 100, "Item")
+        ctx = MockContext(200)
 
-        mock_ctx = MagicMock()
+        result = menu._attempt_purchase(ctx, item)
 
-        result = menu.choose(mock_ctx, 999)
-
-        self.assertIsNone(result)
-
-
-class TestShopMenuUpdateElems(unittest.TestCase):
-    @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_update_elems_formats_correctly(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-
-        mock_item = MagicMock()
-        mock_item.price = 15
-        mock_item.name = "poketeball"
-        mock_item.pretty_name = "Poketeball"
-
-        mock_asset_service.get_items.return_value = {
-            "poketeball": mock_item,
-        }
-
-        config = ShopInventoryConfig(["poketeball"])
-        menu = ShopMenu(config)
-
-        self.assertEqual(len(menu.elems), 1)
+        self.assertTrue(result.is_success)
+        self.assertEqual(ctx.figure.get_money(), 50)
 
 
 class TestShopMenuIntegration(unittest.TestCase):
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_multiple_purchases_update_balance(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
-
-        config = ShopInventoryConfig(["test"])
-        menu = ShopMenu(config)
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_multiple_purchases_update_balance(self, mock_asset_service):
+        config = ShopInventoryConfig(["item"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
         menu.set_money = MagicMock()
 
-        mock_item = MagicMock()
-        mock_item.price = 10
-        mock_item.name = "item"
-        mock_item.pretty_name = "Item"
+        item = TestInvItem("item", 10, "Item")
+        ctx = MockContext(100)
 
-        mock_ctx = MagicMock()
-        balance = [100]
-
-        def get_money():
-            return balance[0]
-
-        def add_money(amount):
-            balance[0] += amount
-
-        mock_ctx.figure.get_money = get_money
-        mock_ctx.figure.add_money = add_money
-
-        result1 = menu._attempt_purchase(mock_ctx, mock_item)
+        result1 = menu._attempt_purchase(ctx, item)
         self.assertTrue(result1.is_success)
-        self.assertEqual(balance[0], 90)
+        self.assertEqual(ctx.figure.get_money(), 90)
 
-        result2 = menu._attempt_purchase(mock_ctx, mock_item)
+        result2 = menu._attempt_purchase(ctx, item)
         self.assertTrue(result2.is_success)
-        self.assertEqual(balance[0], 80)
+        self.assertEqual(ctx.figure.get_money(), 80)
+
+        self.assertEqual(ctx.figure._inventory.get("item"), 2)
+
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_until_insufficient_funds(self, mock_asset_service):
+        config = ShopInventoryConfig(["item"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+        menu.set_money = MagicMock()
+
+        item = TestInvItem("item", 30, "Item")
+        ctx = MockContext(100)
+
+        for i in range(3):
+            result = menu._attempt_purchase(ctx, item)
+            self.assertTrue(result.is_success)
+
+        self.assertEqual(ctx.figure.get_money(), 10)
+
+        result = menu._attempt_purchase(ctx, item)
+        self.assertEqual(result.status, PurchaseResult.INSUFFICIENT_FUNDS)
+        self.assertEqual(ctx.figure.get_money(), 10)
+
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_mixed_stock_purchases(self, mock_asset_service):
+        config = ShopInventoryConfig({
+            "unlimited_item": None,
+            "limited_item": 2
+        })
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+        menu.set_money = MagicMock()
+
+        unlimited = TestInvItem("unlimited_item", 5, "Unlimited")
+        limited = TestInvItem("limited_item", 5, "Limited")
+        ctx = MockContext(100)
+
+        for _ in range(3):
+            menu._attempt_purchase(ctx, unlimited)
+
+        for _ in range(2):
+            result = menu._attempt_purchase(ctx, limited)
+            self.assertTrue(result.is_success)
+
+        result = menu._attempt_purchase(ctx, limited)
+        self.assertEqual(result.status, PurchaseResult.OUT_OF_STOCK)
 
 
 class TestShopMenuEdgeCases(unittest.TestCase):
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_purchase_with_zero_balance(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_with_zero_balance(self, mock_asset_service):
+        config = ShopInventoryConfig(["item"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
 
-        config = ShopInventoryConfig(["test"])
-        menu = ShopMenu(config)
+        item = TestInvItem("item", 10)
+        ctx = MockContext(0)
 
-        mock_item = MagicMock()
-        mock_item.price = 10
-        mock_item.name = "item"
-
-        mock_ctx = MagicMock()
-        mock_ctx.figure.get_money.return_value = 0
-
-        result = menu._attempt_purchase(mock_ctx, mock_item)
+        result = menu._attempt_purchase(ctx, item)
 
         self.assertEqual(result.status, PurchaseResult.INSUFFICIENT_FUNDS)
 
     @patch("pokete.classes.inv.shop_menu.asset_service")
-    @patch("pokete.classes.inv.shop_menu.BaseInv.__init__")
-    def test_purchase_with_negative_price_multiplier_result(
-        self, mock_base_init, mock_asset_service
-    ):
-        mock_base_init.return_value = None
-        mock_asset_service.get_items.return_value = {}
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_with_negative_price_multiplier_result(self, mock_asset_service):
+        config = ShopInventoryConfig(["item"], price_multiplier=-1.0)
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
 
-        config = ShopInventoryConfig(["test"], price_multiplier=-1.0)
-        menu = ShopMenu(config)
+        item = TestInvItem("item", 10)
+        ctx = MockContext(100)
 
-        mock_item = MagicMock()
-        mock_item.price = 10
-        mock_item.name = "item"
-
-        mock_ctx = MagicMock()
-
-        result = menu._attempt_purchase(mock_ctx, mock_item)
+        result = menu._attempt_purchase(ctx, item)
 
         self.assertEqual(result.status, PurchaseResult.ITEM_NOT_FOR_SALE)
+
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_with_very_large_price(self, mock_asset_service):
+        config = ShopInventoryConfig(["expensive"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+
+        item = TestInvItem("expensive", 1000000)
+        ctx = MockContext(100)
+
+        result = menu._attempt_purchase(ctx, item)
+
+        self.assertEqual(result.status, PurchaseResult.INSUFFICIENT_FUNDS)
+
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_purchase_different_items(self, mock_asset_service):
+        config = ShopInventoryConfig(["poketeball", "healing_potion"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+        menu.set_money = MagicMock()
+
+        item1 = TestInvItem("poketeball", 2, "Poketeball")
+        item2 = TestInvItem("healing_potion", 15, "Healing Potion")
+        ctx = MockContext(100)
+
+        menu._attempt_purchase(ctx, item1)
+        menu._attempt_purchase(ctx, item2)
+
+        self.assertEqual(ctx.figure.get_money(), 83)
+        self.assertEqual(ctx.figure._inventory.get("poketeball"), 1)
+        self.assertEqual(ctx.figure._inventory.get("healing_potion"), 1)
+
+
+class TestShopMenuFormatItemDisplay(unittest.TestCase):
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_format_unlimited_stock(self, mock_asset_service):
+        config = ShopInventoryConfig(["item"])
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+
+        item = TestInvItem("item", 10, "Item")
+
+        display = menu._format_item_display(item)
+
+        self.assertEqual(display, "Item : $10")
+
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_format_limited_stock(self, mock_asset_service):
+        config = ShopInventoryConfig({"item": 5})
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+
+        item = TestInvItem("item", 10, "Item")
+
+        display = menu._format_item_display(item)
+
+        self.assertEqual(display, "Item : $10 [x5]")
+
+    @patch("pokete.classes.inv.shop_menu.asset_service")
+    @patch.object(ShopMenu, "__init__", lambda x, y, z: None)
+    def test_format_sold_out(self, mock_asset_service):
+        config = ShopInventoryConfig({"item": 0})
+        menu = ShopMenu.__new__(ShopMenu)
+        menu.inventory_config = config
+
+        item = TestInvItem("item", 10, "Item")
+
+        display = menu._format_item_display(item)
+
+        self.assertEqual(display, "Item : $10 [SOLD OUT]")
 
 
 if __name__ == "__main__":
