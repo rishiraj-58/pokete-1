@@ -17,7 +17,7 @@ from .classes import PlayMap
 from .doors import Door, DoorToCenter, DoorToShop
 from .landscape import Meadow, Poketeball, Sand, Water
 from .map_additions.center import CenterMap, ShopMap
-from .npcs import NPC, Trainer
+from .npcs import NPC, Trainer, ShopNPC, ShopInventory
 from .poke import Poke
 from .settings import settings
 
@@ -212,6 +212,24 @@ def gen_obs(figure):
         NPC(npc, _npc.texts, _fn=_npc.fn, chat=_npc.chat).add(
             obmp.ob_maps[_npc.map], _npc.x, _npc.y
         )
+
+    # Shop NPCs
+    import pokete.data as p_data
+    if hasattr(p_data, 'shops'):
+        for shop_id, shop_data in p_data.shops.items():
+            inventory = ShopInventory(shop_data["inventory"])
+            shop_npc = ShopNPC(
+                name=shop_id,
+                shop_name=shop_data["shop_name"],
+                texts=shop_data["texts"],
+                inventory=inventory,
+                farewell_texts=shop_data.get("farewell_texts"),
+            )
+            shop_npc.add(
+                obmp.ob_maps[shop_data["map"]],
+                shop_data["x"],
+                shop_data["y"]
+            )
 
 
 if __name__ == "__main__":
