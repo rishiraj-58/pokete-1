@@ -8,6 +8,7 @@ from pokete.base.input import hotkeys_save
 
 from . import timer
 from .achievements import achievements
+from .daily_quests import daily_quest_manager
 from .multiplayer.connector import com_service
 from .multiplayer.modeprovider import Mode, modeProvider
 from .pokete_care import pokete_care
@@ -51,6 +52,7 @@ def save(figure):
         "used_npcs": list(dict.fromkeys(figure.used_npcs)),
         "pokete_care": pokete_care.dict(),
         "time": timer.time.time,
+        "daily_quest": daily_quest_manager.to_dict(),
     }
     with open(release.SAVEPATH / "pokete.json", "w+") as file:
         # writes the data to the save file in a nice format

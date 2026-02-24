@@ -42,6 +42,12 @@ from pokete.classes.achievements import achievements
 from pokete.classes.asset_service.service import asset_service
 from pokete.classes.audio import audio
 from pokete.classes.classes import PlayMap
+from pokete.classes.daily_quests import (
+    daily_quest_manager,
+    QuestOverview,
+    notify_quest_complete,
+    show_quest_assigned_notification,
+)
 from pokete.classes.dex import PokeDex
 from pokete.classes.fight import ProtoFigure
 from pokete.classes.game import MapChangeException
@@ -70,6 +76,7 @@ from pokete.figure import Bank, Inventory
 from pokete.release import SPEED_OF_TIME
 from pokete.startup.command import PoketeCommand
 from pokete.startup.logging import init_logger
+import pokete.data as p_data
 
 # Class definition
 ##################
@@ -329,6 +336,11 @@ def _game(_map: PlayMap, figure: Figure):
     if _map.name not in figure.visited_maps:
         figure.visited_maps.append(_map.name)
 
+    # Emit quest event for map visit
+    from pokete.classes.daily_quests import QuestEvent
+    from pokete.classes.daily_quests.quest_tracker import quest_tracker
+    quest_tracker.emit(QuestEvent.map_visited(_map.name))
+
     audio.play(_map.song)
 
     mvp.movemap.code_label.rechar(figure.map.pretty_name)
@@ -499,6 +511,13 @@ def main():
             achievements.add(
                 identifier, achievement_args.title, achievement_args.desc
             )
+
+        # Daily Quest System
+        daily_quest_manager.initialize(p_data.quests)
+        daily_quest_manager.add_on_complete_callback(notify_quest_complete)
+        daily_quest_manager.from_dict(session_info.get("daily_quest"))
+        if daily_quest_manager.current_quest and not daily_quest_manager.current_quest.is_claimed:
+            show_quest_assigned_notification(daily_quest_manager.current_quest)
 
         notifier.set_vars(mvp.movemap)
 

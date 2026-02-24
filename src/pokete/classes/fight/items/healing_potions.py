@@ -1,6 +1,8 @@
 from abc import ABC
 import logging
 
+from pokete.classes.daily_quests import QuestEvent
+from pokete.classes.daily_quests.quest_tracker import quest_tracker
 from pokete.classes.fight.fightmap.fightmap import FightMap
 from pokete.classes.fight.items.item import FightItem, RoundContinuation
 from pokete.classes.fight.providers import Provider
@@ -17,6 +19,8 @@ class GenericeHealingPotion(FightItem, ABC):
         obj.curr.hp = min(obj.curr.full_hp, obj.curr.hp + self.hp)
         obj.curr.hp_bar.update(obj.curr.oldhp)
         logging.info("[Fighitem][%s] Used", self.name)
+        # Emit quest event for using healing item
+        quest_tracker.emit(QuestEvent.item_used(self.name))
         return RoundContinuation.ENEMY_ATTACK
 
 class HealingPotion(GenericeHealingPotion):

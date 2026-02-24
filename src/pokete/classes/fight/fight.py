@@ -10,6 +10,8 @@ from pokete.base.exception_propagation import (
 from pokete.base.periodic_event_manager import PeriodicEventManager
 from pokete.base.single_event import single_event_periodic_event
 from pokete.base.tss import tss
+from pokete.classes.daily_quests import QuestEvent
+from pokete.classes.daily_quests.quest_tracker import quest_tracker
 from pokete.classes.fight.items.item import RoundContinuation
 from pokete.classes.items.invitem import InvItem
 from pokete.release import SPEED_OF_TIME
@@ -21,7 +23,7 @@ from .attack_process import AttackProcess
 from .fight_decision import Result
 from .fightmap import FightMap
 from .items import fight_items
-from .providers import Provider
+from .providers import Provider, NatureProvider
 
 
 class Fight:
@@ -174,6 +176,11 @@ class Fight:
 
         if winner.curr.player:
             winner.curr.poke_stats.add_battle(True)
+            # Emit quest event for winning battle
+            if isinstance(loser, NatureProvider):
+                quest_tracker.emit(QuestEvent.wild_battle_won())
+            else:
+                quest_tracker.emit(QuestEvent.trainer_battle_won())
         else:
             loser.curr.poke_stats.add_battle(False)
 

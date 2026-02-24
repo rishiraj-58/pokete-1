@@ -4,6 +4,8 @@ import random
 import time
 
 from pokete.classes.achievements import achievements
+from pokete.classes.daily_quests import QuestEvent
+from pokete.classes.daily_quests.quest_tracker import quest_tracker
 from pokete.classes.fight.fightmap.fightmap import FightMap
 from pokete.classes.fight.providers import Provider
 from pokete.classes.audio import audio
@@ -58,6 +60,12 @@ class GenericPokeBall(FightItem, ABC):
             if all(poke in obj.caught_pokes for poke in
                    asset_service.get_base_assets().pokes):
                 achievements.achieve("catch_em_all")
+            # Emit quest event for catching pokete
+            poke_types = [t.name for t in enem.curr.types] if hasattr(enem.curr, 'types') and enem.curr.types else []
+            quest_tracker.emit(QuestEvent.pokete_caught(
+                species=enem.curr.identifier if hasattr(enem.curr, 'identifier') else enem.curr.name,
+                types=poke_types
+            ))
             return RoundContinuation.EXIT
         fightmap.outp.outp("You missed!")
         fightmap.show()

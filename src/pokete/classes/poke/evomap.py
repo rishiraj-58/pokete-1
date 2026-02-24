@@ -14,6 +14,8 @@ from pokete.base.ui import Overview
 from ..achievements import achievements
 from ..asset_service.service import asset_service
 from ..classes import OutP
+from ..daily_quests import QuestEvent
+from ..daily_quests.quest_tracker import quest_tracker
 from ..learnattack import LearnAttack
 from .poke import Poke
 
@@ -81,6 +83,11 @@ class EvoMap(gm.GameMap, Overview):
         if new.identifier not in ctx.figure.caught_pokes:
             ctx.figure.caught_pokes.append(new.identifier)
         achievements.achieve("first_evolve")
+        # Emit quest event for evolution
+        quest_tracker.emit(QuestEvent.pokete_evolved(
+            from_species=poke.identifier if hasattr(poke, 'identifier') else poke.name,
+            to_species=new.identifier if hasattr(new, 'identifier') else new.name
+        ))
         logging.info("[Poke] %s evolved into %s", self.name, new.name)
         loops.std(ctx)
         del self
