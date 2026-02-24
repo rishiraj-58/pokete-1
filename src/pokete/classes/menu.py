@@ -12,6 +12,7 @@ from pokete.release import SPEED_OF_TIME
 
 from .achievements import AchievementOverview
 from .audio import audio
+from .daily_quests import DailyQuestView
 from .mods import ModInfo
 from .save import save
 from .settings import Slider, TextInputBox, VisSetting, settings
@@ -25,6 +26,7 @@ class Menu(ChooseBoxView):
         self.represent_char_input = TextInputBox("Char:", 1)
         self.mods_label = se.Text("Mods", state="float")
         self.ach_label = se.Text("Achievements", state="float")
+        self.quest_label = se.Text("Daily Quest", state="float")
         self.about_label = se.Text("About", state="float")
         self.save_label = se.Text("Save", state="float")
         self.exit_label = se.Text("Exit", state="float")
@@ -41,6 +43,7 @@ class Menu(ChooseBoxView):
             VisSetting("Load mods", "load_mods", {True: "On", False: "Off"}),
             self.mods_label,
             self.ach_label,
+            self.quest_label,
             self.about_label,
             self.save_label,
             self.exit_label,
@@ -99,6 +102,8 @@ valid single-space character!",
             About()(ctx)
         elif i == self.ach_label:
             AchievementOverview()(ctx)
+        elif i == self.quest_label:
+            DailyQuestView()(ctx)
         elif isinstance(i, VisSetting) or isinstance(i, Slider):
             i.change(ctx)
         if (

@@ -19,6 +19,7 @@ from .maps import *
 from .achievements import *
 from .weather import *
 from .natures import *
+from .quests import *
 
 # from .npc_actions import *
 

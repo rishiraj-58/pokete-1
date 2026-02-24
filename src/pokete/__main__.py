@@ -36,6 +36,7 @@ from pokete.base.single_event import single_event_periodic_event
 from pokete.base.tss import tss
 from pokete.base.ui.notify import notifier
 from pokete.classes import deck, roadmap, timer
+from pokete.classes.daily_quests import DailyQuestView, daily_quest_manager
 from pokete.classes import movemap as mvp
 from pokete.classes import ob_maps as obmp
 from pokete.classes.achievements import achievements
@@ -363,6 +364,8 @@ def _game(_map: PlayMap, figure: Figure):
         ([Action.INTERACT], (ContextMenu(), (ctx,))),
         ([Action.MENU], (Menu(), (ctx,))),
     ]
+    # Update quest label on game loop
+    mvp.movemap.quest_label_rechar()
     inp_list = [i for j in inp_dict for i in j[0]]
     if _map.weather is not None:
         notifier.notify("Weather", "Info", _map.weather.info)
@@ -490,6 +493,17 @@ def main():
         timer.time.set(session_info.get("time", 0))
         _ev.set_emit_fn(timer.time.emit_input)
 
+        # Initialize daily quest system
+        daily_quest_manager.from_dict(session_info.get("daily_quest", {}))
+        daily_quest_manager.check_new_day()
+
+        def give_quest_reward(money: int, items: dict[str, int]):
+            figure.add_money(money)
+            for item_name, amount in items.items():
+                figure.give_item(item_name, amount)
+
+        daily_quest_manager.set_reward_callback(give_quest_reward)
+
         # Achievements
         achievements.set_achieved(session_info.get("achievements", []))
         for (
@@ -501,6 +515,16 @@ def main():
             )
 
         notifier.set_vars(mvp.movemap)
+
+        # Notify about daily quest
+        if daily_quest_manager.active_quest:
+            quest = daily_quest_manager.active_quest.quest
+            if not daily_quest_manager.active_quest.completed:
+                notifier.notify(
+                    quest.title,
+                    "Daily Quest",
+                    quest.description
+                )
 
         PropagatingThread(target=timer.time_threat, daemon=True).start()
         PropagatingThread(target=autosave, args=(figure,), daemon=True).start()

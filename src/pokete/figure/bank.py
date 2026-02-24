@@ -1,5 +1,7 @@
 import logging
 
+from pokete.classes.daily_quests import daily_quest_manager
+
 
 class Bank:
     __money: int
@@ -11,6 +13,8 @@ class Bank:
         """Adds money
         ARGS:
             money: Amount of money being added"""
+        if money > 0:
+            daily_quest_manager.record_coins_collected(money)
         self.set_money(self.__money + money)
 
     def get_money(self):

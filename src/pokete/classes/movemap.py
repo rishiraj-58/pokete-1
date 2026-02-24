@@ -21,6 +21,7 @@ from pokete.release import SPEED_OF_TIME
 from pokete.util import liner
 
 from .classes import OutP
+from .daily_quests import daily_quest_manager
 from .multiplayer.interactions import movemap_deco
 
 
@@ -35,6 +36,7 @@ class Movemap(GameSubmap, Overview, MouseInteractor):
         self.mouse_choosen = -1
         self.name_label = se.Text("")
         self.balls_label = se.Text("")
+        self.quest_label = se.Text("")
         self.label_bg = se.Square(" ", self.width, 1, state="float")
         self.labels: list[HightlightableText] = [
             HightlightableText(f"{Action.DECK.mapping}: Deck"),
@@ -74,6 +76,9 @@ class Movemap(GameSubmap, Overview, MouseInteractor):
         self.name_label.add(self, 2, self.height - 2)
         self.balls_label.add(
             self, 4 + len(self.name_label.text), self.height - 2
+        )
+        self.quest_label.add(
+            self, 4 + len(self.name_label.text) + 8, self.height - 2
         )
         self.label_bg.add(self, 0, self.height - 1)
         width = 0
@@ -157,6 +162,7 @@ class Movemap(GameSubmap, Overview, MouseInteractor):
             self.label_bg,
             self.name_label,
             self.balls_label,
+            self.quest_label,
         ] + self.labels:
             obj.remove()
         super().resize(height, width, background)
@@ -187,6 +193,25 @@ class Movemap(GameSubmap, Overview, MouseInteractor):
         self.balls_label.set(0, 1)
         self.name_label.rechar(name, esccode=Color.thicc)
         self.balls_label.set(4 + len(self.name_label.text), self.height - 2)
+        self.quest_label.set(
+            4 + len(self.name_label.text) + 8, self.height - 2
+        )
+
+    def quest_label_rechar(self):
+        """Rechars the quest label with current progress"""
+        active_quest = daily_quest_manager.active_quest
+        if active_quest is None:
+            self.quest_label.rechar("")
+        elif active_quest.completed:
+            self.quest_label.rechar(
+                f"[Q:{active_quest.progress_text()}✓]",
+                esccode=Color.green,
+            )
+        else:
+            self.quest_label.rechar(
+                f"[Q:{active_quest.progress_text()}]",
+                esccode=Color.thicc,
+            )
 
 
 movemap: Movemap = Movemap()

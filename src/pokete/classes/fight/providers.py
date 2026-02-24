@@ -8,6 +8,7 @@ from pokete.base.context import Context
 from pokete.base.input_loops import ask_bool
 
 from ..achievements import achievements
+from ..daily_quests import daily_quest_manager
 from ..poke import Poke
 from .fight_decision import FightDecision
 
@@ -170,4 +171,7 @@ class ProtoFigure(Provider):
     def handle_win(self, ctx: Context, loser):
         if hasattr(loser, "trainer"):
             achievements.achieve("first_duel")
+            daily_quest_manager.record_trainer_battle_win()
+        else:
+            daily_quest_manager.record_wild_battle_win()
         self.balls_label_rechar()
