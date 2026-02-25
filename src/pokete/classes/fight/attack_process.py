@@ -3,6 +3,7 @@ import time
 import logging
 
 from pokete.classes.attack import Attack
+from pokete.classes.weather import Weather
 from pokete.release import SPEED_OF_TIME
 from .providers import Provider
 from .fightmap import FightMap
@@ -16,12 +17,26 @@ class AttackProcess:
         self.fightmap: FightMap = fightmap
 
     @staticmethod
-    def get_random_factor(attack, attacker) -> float:
+    def get_random_factor(attack: Attack, attacker: Poke,
+                          weather: Weather | None = None) -> float:
+        """Calculate the random factor for an attack including weather effects
+        ARGS:
+            attack: The attack being used
+            attacker: The attacking Poke
+            weather: Current weather (optional)
+        RETURNS:
+            Random factor (0 = miss, 0.75/1/1.26 = hit variants)"""
+        base_miss_chance = attack.miss_chance + attacker.miss_chance
+
+        weather_miss_modifier = 0.0
+        if weather is not None:
+            weather_miss_modifier = weather.get_miss_modifier(attack.type.name)
+
+        total_miss_chance = max(0.0, min(1.0, base_miss_chance + weather_miss_modifier))
+
         return random.choices(
             [0, 0.75, 1, 1.26],
-            weights=[attack.miss_chance
-                     + attacker.miss_chance,
-                     1, 1, 1], k=1
+            weights=[total_miss_chance, 1, 1, 1], k=1
         )[0]
 
     @staticmethod
@@ -57,7 +72,7 @@ class AttackProcess:
             else:
                 attacker.enem = defender
             w_eff = 1
-            random_factor = self.get_random_factor(attack, attacker)
+            random_factor = self.get_random_factor(attack, attacker, weather)
             if weather is not None:
                 w_eff = weather.effect(attack.type)
                 self.fightmap.show_weather(weather)

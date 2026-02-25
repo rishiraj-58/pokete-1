@@ -1,6 +1,7 @@
 """This file contains the Movemap class with all related mothods"""
 
 import time
+from typing import Optional
 
 import scrap_engine as se
 from scrap_engine.addable.area import Area
@@ -22,6 +23,7 @@ from pokete.util import liner
 
 from .classes import OutP
 from .multiplayer.interactions import movemap_deco
+from .weather import Weather
 
 
 class Movemap(GameSubmap, Overview, MouseInteractor):
@@ -35,6 +37,8 @@ class Movemap(GameSubmap, Overview, MouseInteractor):
         self.mouse_choosen = -1
         self.name_label = se.Text("")
         self.balls_label = se.Text("")
+        self.weather_label = se.Text("")
+        self._current_weather: Optional[Weather] = None
         self.label_bg = se.Square(" ", self.width, 1, state="float")
         self.labels: list[HightlightableText] = [
             HightlightableText(f"{Action.DECK.mapping}: Deck"),
@@ -80,6 +84,7 @@ class Movemap(GameSubmap, Overview, MouseInteractor):
         for label in self.labels:
             label.add(self, width, self.height - 1)
             width += label.width + 2
+        self._update_weather_label()
 
     def assure_distance(self, _x: int, _y: int, width: int, height: int):
         """This ensures the game does not crash when big
@@ -152,12 +157,15 @@ class Movemap(GameSubmap, Overview, MouseInteractor):
     def resize(self, height, width, background=" "):
         """Resizes the map and its attributes
         See se.Map.resize"""
-        for obj in [
+        objs_to_remove = [
             self.underline,
             self.label_bg,
             self.name_label,
             self.balls_label,
-        ] + self.labels:
+        ] + self.labels
+        if self.weather_label.added:
+            objs_to_remove.append(self.weather_label)
+        for obj in objs_to_remove:
             obj.remove()
         super().resize(height, width, background)
         self.underline.resize(self.width, 1)
@@ -187,6 +195,24 @@ class Movemap(GameSubmap, Overview, MouseInteractor):
         self.balls_label.set(0, 1)
         self.name_label.rechar(name, esccode=Color.thicc)
         self.balls_label.set(4 + len(self.name_label.text), self.height - 2)
+
+    def set_weather(self, weather: Optional[Weather]):
+        """Set the current weather to display in HUD
+        ARGS:
+            weather: Weather object or None"""
+        self._current_weather = weather
+        self._update_weather_label()
+
+    def _update_weather_label(self):
+        """Update the weather label display"""
+        if self.weather_label.added:
+            self.weather_label.remove()
+
+        if self._current_weather is not None:
+            weather_text = f"{self._current_weather.icon} {self._current_weather.index.capitalize()}"
+            self.weather_label.rechar(weather_text, esccode=Color.thicc)
+            x_pos = self.width - len(weather_text) - 2
+            self.weather_label.add(self, x_pos, self.height - 2)
 
 
 movemap: Movemap = Movemap()
