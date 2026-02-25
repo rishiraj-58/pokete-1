@@ -64,9 +64,6 @@ class Fight:
         for prov in self.providers:
             prov.index_conf()
         self.fightmap.add_providers(self.providers)
-        # Set the battle weather from the player's current map
-        if hasattr(providers[0], 'map') and providers[0].map is not None:
-            self.fightmap.set_battle_weather(getattr(providers[0].map, 'weather', None))
 
         index = self.initial_player_index()
         for prov in self.providers:

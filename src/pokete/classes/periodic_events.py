@@ -19,6 +19,27 @@ def check_figure_redraw(obj):
         HighGrass.ctx.figure.redraw()
 
 
+class WeatherUpdateEvent(PeriodicEvent):
+    """Periodic event to update weather based on game time"""
+    max_tick = 60  # Check every 60 ticks
+
+    def __init__(self, get_current_map, movemap):
+        self._get_current_map = get_current_map
+        self._movemap = movemap
+        self._last_weather = None
+
+    def tick(self, ctx: Context, tick: int):
+        if tick % self.max_tick == 0:
+            current_map = self._get_current_map()
+            if current_map is not None and hasattr(current_map, 'update_weather'):
+                weather_changed = current_map.update_weather(timer.time.normalized)
+                current_weather = current_map.weather
+                # Update HUD if weather changed or different from last
+                if weather_changed or current_weather != self._last_weather:
+                    self._movemap.weather_label_rechar(current_weather)
+                    self._last_weather = current_weather
+
+
 class MovingGrassEvent(PeriodicEvent):
     max_tick = 100
 

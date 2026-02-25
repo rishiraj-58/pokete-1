@@ -1,11 +1,21 @@
 """Contains Weather class and WeatherManager for dynamic weather cycling"""
 
-import random
-import time
-import threading
-from typing import Optional, Callable
-
+from enum import Enum
+from typing import Optional
 from pokete.data import weathers
+
+
+class WeatherType(Enum):
+    """Enum for weather types"""
+    CLEAR = "clear"
+    RAIN = "rain"
+    THUNDERSTORM = "thunderstorm"
+    FOGGY = "foggy"
+    SUNNY = "sunny"
+
+
+# Weather cycle duration in game minutes
+WEATHER_CYCLE_DURATION = 60
 
 
 class Weather:
@@ -17,148 +27,112 @@ class Weather:
         self.index = index
         self.info = weathers[index]["info"]
         self.effected = weathers[index]["effected"]
-        self.miss_chance_modifier = weathers[index].get("miss_chance_modifier", {})
-        self.global_miss_modifier = weathers[index].get("global_miss_modifier", 0.0)
-        self.icon = weathers[index].get("icon", "")
-        self.cycle_weathers = weathers[index].get("cycle_weathers", [])
-        self.cycle_weights = weathers[index].get("cycle_weights", [])
+        self._miss_chance_modifier = weathers[index].get("miss_chance_modifier", {})
 
     def effect(self, typ) -> float:
-        """Gives an additional attackfactor
+        """Gives an additional attack factor based on weather
         ARGS:
             typ: The attacks type
         RETURNS:
-            attackfactor"""
+            Attack damage multiplier"""
         return self.effected.get(typ.name, 1)
 
-    def get_miss_modifier(self, attack_type_name: str) -> float:
-        """Gets the miss chance modifier for an attack type
+    def get_miss_chance_modifier(self, typ) -> float:
+        """Gets additional miss chance modifier for attack type
         ARGS:
-            attack_type_name: The attack type name
+            typ: The attacks type
         RETURNS:
-            miss chance modifier (additive)"""
-        type_modifier = self.miss_chance_modifier.get(attack_type_name, 0.0)
-        return type_modifier + self.global_miss_modifier
+            Additional miss chance to add (can be negative for improved accuracy)"""
+        return self._miss_chance_modifier.get(typ.name, 0)
 
-    def get_next_weather(self) -> Optional[str]:
-        """Gets the next weather based on cycle weights
+    def get_global_miss_modifier(self) -> float:
+        """Gets global miss chance modifier that applies to all attacks
         RETURNS:
-            Next weather index or None if no cycling configured"""
-        if not self.cycle_weathers or not self.cycle_weights:
-            return None
-        return random.choices(self.cycle_weathers, weights=self.cycle_weights, k=1)[0]
+            Additional miss chance applied to all attacks"""
+        return self._miss_chance_modifier.get("all", 0)
+
+    @property
+    def display_name(self) -> str:
+        """Returns a short display name for HUD"""
+        display_names = {
+            "rain": "Rain",
+            "thunderstorm": "Storm",
+            "foggy": "Fog",
+            "sunny": "Sunny",
+            "clear": "Clear",
+        }
+        return display_names.get(self.index, self.index.capitalize())
+
+    @property
+    def icon(self) -> str:
+        """Returns an icon/symbol for the weather"""
+        icons = {
+            "rain": "~",
+            "thunderstorm": "⚡",
+            "foggy": "≈",
+            "sunny": "☀",
+            "clear": "○",
+        }
+        return icons.get(self.index, "?")
 
 
 class WeatherManager:
-    """Manages weather cycling for maps using a timer-based system"""
+    """Manages weather cycling for maps"""
 
-    DEFAULT_CYCLE_INTERVAL = 300  # 5 minutes in seconds
+    def __init__(self, base_weather: Optional[str] = None):
+        self._base_weather = base_weather
+        self._current_weather: Optional[Weather] = None
+        self._last_cycle_time = 0
+        if base_weather is not None:
+            self._current_weather = Weather(base_weather)
 
-    def __init__(self, cycle_interval: float = DEFAULT_CYCLE_INTERVAL):
-        self._cycle_interval = cycle_interval
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._lock = threading.Lock()
-        self._maps: dict[str, "PlayMap"] = {}
-        self._on_weather_change: Optional[Callable[[str, Weather], None]] = None
+    @property
+    def current(self) -> Optional[Weather]:
+        """Returns current weather"""
+        return self._current_weather
 
-    def register_map(self, map_name: str, play_map: "PlayMap"):
-        """Register a map for weather management
+    def update(self, game_time: int) -> bool:
+        """Updates weather based on game time
         ARGS:
-            map_name: The map identifier
-            play_map: The PlayMap instance"""
-        with self._lock:
-            self._maps[map_name] = play_map
-
-    def unregister_map(self, map_name: str):
-        """Unregister a map from weather management
-        ARGS:
-            map_name: The map identifier"""
-        with self._lock:
-            if map_name in self._maps:
-                del self._maps[map_name]
-
-    def set_weather_change_callback(self, callback: Callable[[str, Weather], None]):
-        """Set callback for weather change events
-        ARGS:
-            callback: Function(map_name, new_weather) called on weather change"""
-        self._on_weather_change = callback
-
-    def start(self):
-        """Start the weather cycling thread"""
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._cycle_loop, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        """Stop the weather cycling thread"""
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=1.0)
-            self._thread = None
-
-    def _cycle_loop(self):
-        """Main loop for cycling weather"""
-        while self._running:
-            time.sleep(self._cycle_interval)
-            if not self._running:
-                break
-            self._cycle_all_maps()
-
-    def _cycle_all_maps(self):
-        """Cycle weather for all registered maps"""
-        with self._lock:
-            for map_name, play_map in self._maps.items():
-                self._cycle_map_weather(map_name, play_map)
-
-    def _cycle_map_weather(self, map_name: str, play_map: "PlayMap"):
-        """Cycle weather for a single map
-        ARGS:
-            map_name: The map identifier
-            play_map: The PlayMap instance"""
-        if play_map.weather is None:
-            return
-
-        next_weather_index = play_map.weather.get_next_weather()
-        if next_weather_index is None:
-            return
-
-        play_map.weather = Weather(next_weather_index)
-
-        if self._on_weather_change:
-            self._on_weather_change(map_name, play_map.weather)
-
-    def force_cycle(self, map_name: str):
-        """Force immediate weather cycle for a specific map
-        ARGS:
-            map_name: The map identifier"""
-        with self._lock:
-            if map_name in self._maps:
-                self._cycle_map_weather(map_name, self._maps[map_name])
-
-    def set_weather(self, map_name: str, weather_index: str):
-        """Manually set weather for a specific map
-        ARGS:
-            map_name: The map identifier
-            weather_index: The weather to set"""
-        with self._lock:
-            if map_name in self._maps:
-                self._maps[map_name].weather = Weather(weather_index)
-                if self._on_weather_change:
-                    self._on_weather_change(map_name, self._maps[map_name].weather)
-
-    def get_weather(self, map_name: str) -> Optional[Weather]:
-        """Get current weather for a map
-        ARGS:
-            map_name: The map identifier
+            game_time: Current game time in minutes
         RETURNS:
-            Current Weather or None"""
-        with self._lock:
-            if map_name in self._maps:
-                return self._maps[map_name].weather
-            return None
+            True if weather changed"""
+        if self._base_weather is None:
+            return False
 
+        cycle_position = (game_time // WEATHER_CYCLE_DURATION) % 4
+        new_weather_index = self._get_weather_for_cycle(cycle_position)
 
-weather_manager = WeatherManager()
+        if self._current_weather is None or self._current_weather.index != new_weather_index:
+            self._current_weather = Weather(new_weather_index)
+            self._last_cycle_time = game_time
+            return True
+        return False
+
+    def _get_weather_for_cycle(self, cycle: int) -> str:
+        """Determines weather based on cycle position and base weather
+        ARGS:
+            cycle: Current cycle position (0-3)
+        RETURNS:
+            Weather index string"""
+        weather_progressions = {
+            "rain": ["rain", "thunderstorm", "rain", "foggy"],
+            "thunderstorm": ["thunderstorm", "rain", "foggy", "thunderstorm"],
+            "foggy": ["foggy", "foggy", "rain", "foggy"],
+            "sunny": ["sunny", "sunny", "sunny", "sunny"],
+        }
+        progression = weather_progressions.get(self._base_weather, [self._base_weather] * 4)
+        return progression[cycle]
+
+    def set_weather(self, weather_index: str):
+        """Manually sets weather (for testing/events)
+        ARGS:
+            weather_index: The weather type to set"""
+        if weather_index in weathers:
+            self._current_weather = Weather(weather_index)
+        else:
+            self._current_weather = None
+
+    def clear_weather(self):
+        """Clears current weather"""
+        self._current_weather = None

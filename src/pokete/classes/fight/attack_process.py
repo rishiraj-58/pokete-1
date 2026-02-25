@@ -1,6 +1,7 @@
 import random
 import time
 import logging
+from typing import Optional
 
 from pokete.classes.attack import Attack
 from pokete.classes.weather import Weather
@@ -18,21 +19,23 @@ class AttackProcess:
 
     @staticmethod
     def get_random_factor(attack: Attack, attacker: Poke,
-                          weather: Weather | None = None) -> float:
-        """Calculate the random factor for an attack including weather effects
+                          weather: Optional[Weather] = None) -> float:
+        """Calculates random factor including weather-based miss modifiers
         ARGS:
             attack: The attack being used
             attacker: The attacking Poke
             weather: Current weather (optional)
         RETURNS:
-            Random factor (0 = miss, 0.75/1/1.26 = hit variants)"""
+            Random factor (0 for miss, 0.75/1/1.26 for hit variants)"""
         base_miss_chance = attack.miss_chance + attacker.miss_chance
 
-        weather_miss_modifier = 0.0
+        # Apply weather modifiers
+        weather_miss_modifier = 0
         if weather is not None:
-            weather_miss_modifier = weather.get_miss_modifier(attack.type.name)
+            weather_miss_modifier = weather.get_global_miss_modifier()
+            weather_miss_modifier += weather.get_miss_chance_modifier(attack.type)
 
-        total_miss_chance = max(0.0, min(1.0, base_miss_chance + weather_miss_modifier))
+        total_miss_chance = max(0, min(1, base_miss_chance + weather_miss_modifier))
 
         return random.choices(
             [0, 0.75, 1, 1.26],
@@ -60,7 +63,7 @@ class AttackProcess:
         ARGS:
             attack: Attack object
             defender: Enemy Poke"""
-        weather = providers[0].map.weather
+        weather = providers[0].map.weather if hasattr(providers[0], 'map') else None
         if attack.ap > 0:
             for eff in attacker.effects:
                 eff.remove()

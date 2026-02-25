@@ -5,7 +5,7 @@ import scrap_engine as se
 import pokete.base.game_map as gm
 from pokete.base.periodic_event_manager import PeriodicEvent
 from pokete.classes.asset_service.resources import PokeArgs
-from .weather import Weather
+from .weather import Weather, WeatherManager
 
 
 class PlayMap(gm.GameMap):
@@ -36,9 +36,25 @@ class PlayMap(gm.GameMap):
         if self.trainers is None:
             self.trainers = []
         self.__extra_actions = extra_actions
-        self.weather = None
-        if weather is not None:
-            self.weather = Weather(weather)
+        self._weather_manager = WeatherManager(weather)
+
+    @property
+    def weather(self) -> Optional[Weather]:
+        """Returns current weather on this map"""
+        return self._weather_manager.current
+
+    @property
+    def weather_manager(self) -> WeatherManager:
+        """Returns the weather manager for this map"""
+        return self._weather_manager
+
+    def update_weather(self, game_time: int) -> bool:
+        """Updates weather based on game time
+        ARGS:
+            game_time: Current game time in minutes
+        RETURNS:
+            True if weather changed"""
+        return self._weather_manager.update(game_time)
 
     def register_obj(self, name, obj):
         """Adds an object to the registry
