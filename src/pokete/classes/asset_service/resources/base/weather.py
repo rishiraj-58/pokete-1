@@ -7,16 +7,31 @@ from typing import TypedDict
 class WeatherDict(TypedDict):
     info: str
     effected: dict[str, float]
+    miss_chance_modifier: dict[str, float]
+    global_miss_modifier: float
+    icon: str
+    cycle_weathers: list[str]
+    cycle_weights: list[float]
 
 
 class Weather:
     def __init__(
         self,
         info: str,
-        effected: dict[str, float]
+        effected: dict[str, float],
+        miss_chance_modifier: dict[str, float] | None = None,
+        global_miss_modifier: float = 0.0,
+        icon: str = "",
+        cycle_weathers: list[str] | None = None,
+        cycle_weights: list[float] | None = None,
     ):
         self.info: str = info
         self.effected: dict[str, float] = effected
+        self.miss_chance_modifier: dict[str, float] = miss_chance_modifier or {}
+        self.global_miss_modifier: float = global_miss_modifier
+        self.icon: str = icon
+        self.cycle_weathers: list[str] = cycle_weathers or []
+        self.cycle_weights: list[float] = cycle_weights or []
 
     @classmethod
     def from_dict(cls, _d: WeatherDict | None) -> "Weather | None":
@@ -25,6 +40,11 @@ class Weather:
         return cls(
             info=_d["info"],
             effected=_d["effected"],
+            miss_chance_modifier=_d.get("miss_chance_modifier", {}),
+            global_miss_modifier=_d.get("global_miss_modifier", 0.0),
+            icon=_d.get("icon", ""),
+            cycle_weathers=_d.get("cycle_weathers", []),
+            cycle_weights=_d.get("cycle_weights", []),
         )
 
     @staticmethod
@@ -39,5 +59,10 @@ class Weather:
         
         ret["info"] = self.info
         ret["effected"] = self.effected
+        ret["miss_chance_modifier"] = self.miss_chance_modifier
+        ret["global_miss_modifier"] = self.global_miss_modifier
+        ret["icon"] = self.icon
+        ret["cycle_weathers"] = self.cycle_weathers
+        ret["cycle_weights"] = self.cycle_weights
 
         return ret

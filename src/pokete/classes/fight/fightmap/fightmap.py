@@ -20,6 +20,7 @@ from pokete.base.ui.elements.text import HightlightableText
 from pokete.classes import animations, deck
 from pokete.classes.asset_service.service import asset_service
 from pokete.classes.items.invitem import InvItem
+from pokete.classes.weather import Weather
 from pokete.release import SPEED_OF_TIME
 
 from ...classes import OutP
@@ -43,6 +44,7 @@ class FightMap(gm.GameMap, Overview, MouseInteractor):
         self.invbox = InvBox()
         self.providers: list[Provider] = []
         self.overview: Overview
+        self._current_weather: Weather | None = None
         # icos
         self.deadico1 = se.Text(r"""
     \ /
@@ -63,6 +65,7 @@ class FightMap(gm.GameMap, Overview, MouseInteractor):
         self.p_upperline = se.Text("+----------------", state="float")
         self.p_sideline = se.Square("|", 1, 4, state="float")
         self.outp = OutP("", state="float")
+        self.weather_label = se.Text("", state="float")
         self.label_attack = HightlightableText(
             f"{Action.CHOOSE_ATTACK.mapping}: Attack", state="float"
         )
@@ -123,6 +126,7 @@ class FightMap(gm.GameMap, Overview, MouseInteractor):
         for label in self.labels:
             label.add(self, x, self.height - 1)
             x += label.width + 2
+        self._update_weather_display()
 
     def resize_view(self):
         """Manages recursive view resizing"""
@@ -424,9 +428,31 @@ class FightMap(gm.GameMap, Overview, MouseInteractor):
         }[True]
         self.outp.outp(f"{attacker.ext_name} used {attack.name}! {eff_text}")
 
-    def show_weather(self, weather):
+    def show_weather(self, weather: Weather):
+        """Display weather effect during attack
+        ARGS:
+            weather: The current Weather object"""
+        self._current_weather = weather
+        self._update_weather_display()
         self.outp.outp(weather.info)
         time.sleep(SPEED_OF_TIME * 1.5)
+
+    def _update_weather_display(self):
+        """Update the weather label in the battle UI"""
+        if self.weather_label.added:
+            self.weather_label.remove()
+
+        if self._current_weather is not None:
+            weather_text = f"{self._current_weather.icon} {self._current_weather.index.capitalize()}"
+            self.weather_label.rechar(weather_text)
+            self.weather_label.add(self, self.width - len(weather_text) - 2, 0)
+
+    def set_battle_weather(self, weather: Weather | None):
+        """Set the weather for the current battle
+        ARGS:
+            weather: Weather object or None"""
+        self._current_weather = weather
+        self._update_weather_display()
 
     def set_providers(self, providers: list[Provider]):
         self.providers = providers
