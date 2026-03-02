@@ -10,7 +10,7 @@ from . import timer
 from .achievements import achievements
 from .multiplayer.connector import com_service
 from .multiplayer.modeprovider import Mode, modeProvider
-from .pokete_care import pokete_care
+from .pokete_care import pokete_care, breeding_manager
 from .settings import settings
 
 HOME = Path.home()
@@ -50,6 +50,7 @@ def save(figure):
         # filters doublicates from figure.used_npcs
         "used_npcs": list(dict.fromkeys(figure.used_npcs)),
         "pokete_care": pokete_care.dict(),
+        "breeding": breeding_manager.dict(),
         "time": timer.time.time,
     }
     with open(release.SAVEPATH / "pokete.json", "w+") as file:
@@ -90,6 +91,11 @@ def read_save():
         "pokete_care": {
             "entry": 0,
             "poke": None,
+        },
+        "breeding": {
+            "breeding_pair": {"parent1": None, "parent2": None},
+            "egg": None,
+            "notifications": [],
         },
         "time": 0,
     }
