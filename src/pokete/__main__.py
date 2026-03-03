@@ -55,14 +55,13 @@ from pokete.classes.multiplayer.interactions.context_menu import ContextMenu
 from pokete.classes.multiplayer.modeprovider import Mode, modeProvider
 from pokete.classes.multiplayer.pc_manager import pc_manager
 from pokete.classes.periodic_events import (
-    BreedingCheckEvent,
     MovingGrassEvent,
     MovingWaterEvent,
     NotifierEvent,
     TreatNPCEvent,
 )
 from pokete.classes.poke import Poke, Stats
-from pokete.classes.pokete_care import pokete_care, breeding_manager
+from pokete.classes.pokete_care import pokete_care, breeding_manager, BreedingCheckEvent
 from pokete.classes.pre_game import PreGameMap
 from pokete.classes.save import read_save, save
 from pokete.classes.settings import settings
@@ -344,8 +343,8 @@ def _game(_map: PlayMap, figure: Figure):
             MovingGrassEvent(_map),
             MovingWaterEvent(_map),
             *([TreatNPCEvent()] if modeProvider.mode == Mode.SINGLE else []),
+            *([BreedingCheckEvent()] if modeProvider.mode == Mode.SINGLE else []),
             NotifierEvent(),
-            BreedingCheckEvent(),
             single_event_periodic_event,
         ]
         + _map.extra_actions()
@@ -493,10 +492,11 @@ def main():
             session_info.get(
                 "breeding",
                 {
-                    "breeding_pair": None,
-                    "egg": None,
+                    "parent1": None,
+                    "parent2": None,
+                    "start_time": 0,
                     "egg_ready": False,
-                    "notified": False,
+                    "egg": None,
                 },
             )
         )

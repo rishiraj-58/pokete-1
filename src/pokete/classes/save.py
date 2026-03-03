@@ -93,10 +93,12 @@ def read_save():
             "poke": None,
         },
         "breeding": {
-            "breeding_pair": None,
-            "egg": None,
+            "parent1": None,
+            "parent2": None,
+            "start_time": 0,
             "egg_ready": False,
-            "notified": False,
+            "egg": None,
+            "history": [],
         },
         "time": 0,
     }
