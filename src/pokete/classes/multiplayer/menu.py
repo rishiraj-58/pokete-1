@@ -16,7 +16,7 @@ from ..landscape import MapInteract
 from ..multiplayer.modeprovider import Mode, modeProvider
 from ..npcs import NPC
 from ..npcs.data import base_npc_actions, npc_actions
-from ..pokete_care import PoketeCareNPCAction, pokete_care, breeding_manager
+from ..pokete_care import PoketeCareNPCAction, pokete_care
 from . import connector
 from .communication import com_service
 from .interactions import movemap_deco
@@ -47,9 +47,7 @@ class ModeChooser(BetterChooseBoxView[bool]):
                     {
                         **base_npc_actions,
                         **npc_actions,
-                        "playmap_50_npc_29": PoketeCareNPCAction(
-                            pokete_care, breeding_manager
-                        ),
+                        "playmap_50_npc_29": PoketeCareNPCAction(pokete_care),
                     }
                 )
             elif idx == 1:

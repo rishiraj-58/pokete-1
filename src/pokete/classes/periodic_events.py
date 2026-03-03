@@ -80,9 +80,10 @@ class NotifierEvent(PeriodicEvent):
 
 
 class BreedingCheckEvent(PeriodicEvent):
-    """Periodically checks if breeding egg is ready and notifies user"""
+    """Periodically checks breeding status and notifies when egg is ready."""
     max_tick = 50
 
     def tick(self, ctx: Context, tick: int):
         if tick % self.max_tick == 0:
-            breeding_manager.check_and_notify()
+            breeding_manager.check_and_generate_egg()
+            breeding_manager.notify_if_ready()
