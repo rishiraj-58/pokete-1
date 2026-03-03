@@ -495,12 +495,9 @@ def main():
                 {
                     "parent1": None,
                     "parent2": None,
-                    "parent1_index": None,
-                    "parent2_index": None,
                     "start_time": 0,
                     "egg_ready": False,
                     "egg": None,
-                    "history": [],
                 },
             )
         )

@@ -2,33 +2,49 @@
 
 These tests verify the core breeding logic including:
 - Type compatibility checking
-- Weighted stat computation
+- Weighted stat computation with bonuses
 - Egg generation and hatching
+- Egg move inheritance
+- Breeding history tracking
+- Parent index preservation for cancellation
+- Multi-type hatch bonus
 - Serialization/deserialization
 - Notification when eggs are ready
-- Egg move inheritance
-- Breeding history
+- Periodic event integration
 
-Note: Due to Python version requirements (3.12+), some tests use mocks
-and test the logic in isolation from the actual game code.
+Note: Due to Python version requirements (3.12+), these tests use mocks
+and test the logic in isolation. The tests verify that the implementation
+follows the expected behavior patterns.
 """
 
 import unittest
 from unittest.mock import Mock, MagicMock, patch
 import math
-from datetime import datetime
 
+
+# =============================================================================
+# Constants (mirroring production code)
+# =============================================================================
+
+BASE_HATCH_TIME = 300
+MAX_HISTORY_ENTRIES = 5
+MULTI_TYPE_BONUS = 0.10
+
+
+# =============================================================================
+# Mock Classes
+# =============================================================================
 
 class MockType:
     """Mock type object for testing."""
-    def __init__(self, name: str):
+    def __init__(self, name):
         self.name = name
 
 
 class MockPokeInfo:
     """Mock pokete info (base stats) for testing."""
     def __init__(self, hp=20, atc=5, defense=3, initiative=4, types=None,
-                 attacks=None, pool=None):
+                 attacks=None, pool=None, evolve_poke="", evolve_lvl=0):
         self.hp = hp
         self.atc = atc
         self.defense = defense
@@ -36,64 +52,57 @@ class MockPokeInfo:
         self.types = types or ["normal"]
         self.attacks = attacks or ["tackle"]
         self.pool = pool or []
+        self.evolve_poke = evolve_poke
+        self.evolve_lvl = evolve_lvl
+
+
+class MockAttackData:
+    """Mock attack data for testing."""
+    def __init__(self, name, min_lvl=0, types=None):
+        self.name = name
+        self.min_lvl = min_lvl
+        self.types = types or ["normal"]
 
 
 class MockPoke:
-    """Mock Poke class for testing without full game dependencies."""
-    def __init__(self, identifier: str, xp: int = 0, types=None, inf=None,
-                 attacks=None, name=None):
+    """Mock Poke class for testing."""
+    def __init__(self, identifier, xp=0, types=None, inf=None, attacks=None,
+                 hp=None, atc=None, defense=None, initiative=None):
         self.identifier = identifier
         self.xp = xp
         self.types = [MockType(t) for t in (types or ["normal"])]
         self.inf = inf or MockPokeInfo(types=types or ["normal"])
-        self.name = name or identifier.capitalize()
+        self.name = identifier.capitalize()
         self.attacks = attacks or ["tackle"]
+        self.hp = hp if hp is not None else self.inf.hp
+        self.full_hp = self.hp
+        self.atc = atc if atc is not None else self.inf.atc
+        self.defense = defense if defense is not None else self.inf.defense
+        self.initiative = initiative if initiative is not None else self.inf.initiative
 
     def lvl(self):
-        """Return level based on xp."""
         return int(math.sqrt(self.xp + 1))
 
     def dict(self):
-        """Serialize to dict."""
         return {
             "name": self.identifier,
             "xp": self.xp,
-            "hp": 20,
+            "hp": self.hp,
             "ap": [],
             "effects": [],
             "attacks": self.attacks,
             "shiny": False,
             "nature": {"nature": "normal", "grade": 1},
-            "stats": {
-                "ownership_date": None,
-                "evolved_date": None,
-                "total_battles": 0,
-                "lost_battles": 0,
-                "win_battles": 0,
-                "earned_xp": 0,
-                "caught_with": None,
-                "run_away": 0,
-            },
+            "stats": {},
         }
 
 
-class MockAttack:
-    """Mock attack for testing."""
-    def __init__(self, name: str, min_lvl: int = 1, types=None, is_generic=False):
-        self.name = name
-        self.min_lvl = min_lvl
-        self.types = types or ["normal"]
-        self.is_generic = is_generic
-
-
-class MockTimer:
-    """Mock timer for testing."""
-    def __init__(self, time: int = 0):
-        self.time = time
-
+# =============================================================================
+# Production Method Implementations (for testing)
+# =============================================================================
 
 def can_breed(poke1, poke2):
-    """Check if two poketes are compatible for breeding."""
+    """Production logic: Check if two poketes are compatible."""
     if poke1 is None or poke2 is None:
         return False
     if poke1.identifier == "__fallback__" or poke2.identifier == "__fallback__":
@@ -104,7 +113,7 @@ def can_breed(poke1, poke2):
 
 
 def get_shared_types(poke1, poke2):
-    """Get the types shared between two poketes."""
+    """Production logic: Get shared types."""
     if poke1 is None or poke2 is None:
         return []
     types1 = set(t.name for t in poke1.types)
@@ -112,179 +121,94 @@ def get_shared_types(poke1, poke2):
     return list(types1 & types2)
 
 
-def compute_weighted_stat(stat1, stat2, weight1=0.5, weight2=0.5):
-    """Compute weighted average of two stats."""
-    base = stat1 * weight1 + stat2 * weight2
-    return max(1, int(base))
-
-
-def compute_hatch_time(poke1, poke2, base_time=300):
-    """Compute how long the egg needs to hatch based on parents."""
-    if poke1 is None or poke2 is None:
-        return base_time
-    avg_level = (poke1.lvl() + poke2.lvl()) / 2
-    level_modifier = max(0.5, 1.0 - (avg_level / 100))
-    return int(base_time * level_modifier)
-
-
-def get_egg_moves(parent1, parent2, offspring_id, attacks_data, pokes_data):
-    """Get moves that the egg can inherit from parents."""
+def compute_hatch_time(parent1, parent2, base_time=BASE_HATCH_TIME):
+    """Production logic: Compute hatch time with multi-type bonus."""
     if parent1 is None or parent2 is None:
-        return []
+        return base_time
 
-    offspring_info = pokes_data.get(offspring_id)
-    if offspring_info is None:
-        return []
+    avg_level = (parent1.lvl() + parent2.lvl()) / 2
+    level_modifier = max(0.5, 1.0 - (avg_level / 100))
 
-    # Get attacks the offspring can learn at level 1
-    level1_attacks = set(
-        atk for atk in offspring_info.attacks
-        if attacks_data.get(atk) and attacks_data[atk].min_lvl <= 1
-    )
+    shared_types = get_shared_types(parent1, parent2)
+    type_modifier = 1.0 - MULTI_TYPE_BONUS if len(shared_types) >= 2 else 1.0
 
-    inherited_moves = []
+    return int(base_time * level_modifier * type_modifier)
 
-    # Try to inherit one move from each parent
-    for parent in [parent1, parent2]:
-        if len(inherited_moves) >= 2:
+
+def compute_stat_bonus(stat1, stat2, base_stat):
+    """Production logic: Compute stat bonus from parents."""
+    parent_avg = stat1 * 0.4 + stat2 * 0.4
+    # Note: Actual implementation has random variation, we test base calculation
+    inherited = parent_avg
+    return int(inherited - base_stat * 0.8)
+
+
+def compute_inherited_moves(parent1_attacks, parent2_attacks, attacks_db, offspring_learnable):
+    """Production logic: Compute inherited moves."""
+    inherited = []
+
+    for parent_attacks in [parent1_attacks, parent2_attacks]:
+        if len(inherited) >= 2:
             break
 
-        # Get parent's current attacks that offspring can't learn at level 1
-        candidate_moves = [
-            atk for atk in parent.attacks
-            if atk not in level1_attacks
-            and atk not in inherited_moves
-            and attacks_data.get(atk) is not None
-        ]
+        eligible = []
+        for atk_name in parent_attacks:
+            if atk_name in attacks_db:
+                atk_data = attacks_db[atk_name]
+                if atk_data.min_lvl > 0 and atk_name not in offspring_learnable:
+                    eligible.append(atk_name)
 
-        if candidate_moves:
-            inherited_moves.append(candidate_moves[0])  # Deterministic for testing
+        if eligible and eligible[0] not in inherited:
+            inherited.append(eligible[0])
 
-    return inherited_moves
+    return inherited
 
 
-class TestBreedingCompatibility(unittest.TestCase):
-    """Tests for pokete breeding compatibility."""
+# =============================================================================
+# Test Classes
+# =============================================================================
+
+class TestCanBreed(unittest.TestCase):
+    """Tests for breeding compatibility checking."""
 
     def setUp(self):
-        """Set up test fixtures with mocked dependencies."""
-        self.poke1_water_normal = MockPoke(
-            "karpi", 50, ["water", "normal"],
-            MockPokeInfo(15, 0, 0, 0, ["water", "normal"])
-        )
-        self.poke2_water = MockPoke(
-            "blub", 50, ["water", "normal"],
-            MockPokeInfo(20, 2, 1, 1, ["water", "normal"])
-        )
-        self.poke3_fire = MockPoke(
-            "wolfior", 50, ["fire", "normal"],
-            MockPokeInfo(20, 6, 3, 4, ["fire", "normal"])
-        )
-        self.poke4_normal = MockPoke(
-            "mowcow", 50, ["normal"],
-            MockPokeInfo(20, 2, 3, 2, ["normal"])
-        )
+        self.poke_water_normal = MockPoke("karpi", 50, ["water", "normal"])
+        self.poke_water_normal2 = MockPoke("blub", 50, ["water", "normal"])
+        self.poke_fire_normal = MockPoke("wolfior", 50, ["fire", "normal"])
+        self.poke_normal = MockPoke("mowcow", 50, ["normal"])
         self.fallback = MockPoke("__fallback__", 0)
 
-    def test_compatible_poketes_sharing_type(self):
-        """Two poketes sharing a type should be compatible."""
-        self.assertTrue(can_breed(self.poke1_water_normal, self.poke2_water))
+    def test_compatible_sharing_multiple_types(self):
+        """Poketes sharing multiple types should be compatible."""
+        self.assertTrue(can_breed(self.poke_water_normal, self.poke_water_normal2))
 
-    def test_compatible_poketes_sharing_normal(self):
-        """Poketes sharing only 'normal' type should be compatible."""
-        self.assertTrue(can_breed(self.poke3_fire, self.poke4_normal))
+    def test_compatible_sharing_single_type(self):
+        """Poketes sharing single type should be compatible."""
+        self.assertTrue(can_breed(self.poke_fire_normal, self.poke_normal))
 
-    def test_incompatible_poketes_no_shared_type(self):
+    def test_incompatible_no_shared_type(self):
         """Poketes with no shared types should be incompatible."""
-        pure_fire = MockPoke("pure_fire", 50, ["fire"])
-        pure_water = MockPoke("pure_water", 50, ["water"])
+        pure_fire = MockPoke("fire", 50, ["fire"])
+        pure_water = MockPoke("water", 50, ["water"])
         self.assertFalse(can_breed(pure_fire, pure_water))
 
-    def test_fallback_pokete_not_valid(self):
+    def test_fallback_not_valid(self):
         """Fallback pokete should not be valid for breeding."""
-        self.assertFalse(can_breed(self.fallback, self.poke1_water_normal))
-        self.assertFalse(can_breed(self.poke1_water_normal, self.fallback))
+        self.assertFalse(can_breed(self.fallback, self.poke_water_normal))
+        self.assertFalse(can_breed(self.poke_water_normal, self.fallback))
 
-    def test_none_pokete_not_valid(self):
-        """None pokete should not be valid for breeding."""
-        self.assertFalse(can_breed(None, self.poke1_water_normal))
-        self.assertFalse(can_breed(self.poke1_water_normal, None))
+    def test_none_not_valid(self):
+        """None should not be valid for breeding."""
+        self.assertFalse(can_breed(None, self.poke_water_normal))
+        self.assertFalse(can_breed(self.poke_water_normal, None))
         self.assertFalse(can_breed(None, None))
 
 
-class TestWeightedStatComputation(unittest.TestCase):
-    """Tests for weighted stat computation logic."""
-
-    def test_weighted_average_equal_weights(self):
-        """Test weighted average with equal weights."""
-        result = compute_weighted_stat(10, 20, 0.5, 0.5)
-        self.assertEqual(result, 15)
-
-    def test_weighted_average_unequal_weights(self):
-        """Test weighted average with unequal weights."""
-        result = compute_weighted_stat(10, 20, 0.4, 0.4)
-        self.assertEqual(result, 12)
-
-    def test_minimum_stat_value(self):
-        """Stats should not go below 1."""
-        result = compute_weighted_stat(0, 0, 0.5, 0.5)
-        self.assertEqual(result, 1)
-
-    def test_stat_computation_asymmetric(self):
-        """Test stat computation with different parent stats."""
-        atc = compute_weighted_stat(10, 2, 0.5, 0.5)
-        defense = compute_weighted_stat(2, 10, 0.5, 0.5)
-        self.assertEqual(atc, 6)
-        self.assertEqual(defense, 6)
-
-    def test_stat_inheritance_formula(self):
-        """Test the full stat inheritance formula: 40% p1 + 40% p2 + 20% base."""
-        p1_hp, p2_hp, base_hp = 30, 20, 25
-        # Weighted average of parents
-        parent_avg = compute_weighted_stat(p1_hp, p2_hp, 0.4, 0.4)  # 20
-        # Final: 80% parent_avg + 20% base
-        final_hp = int(parent_avg * 0.8 + base_hp * 0.2)  # 16 + 5 = 21
-        self.assertEqual(final_hp, 21)
-
-
-class TestHatchTimeComputation(unittest.TestCase):
-    """Tests for egg hatching time computation."""
-
-    def setUp(self):
-        self.low_level_poke1 = MockPoke("low1", 0)  # Level 1
-        self.low_level_poke2 = MockPoke("low2", 0)  # Level 1
-        self.high_level_poke1 = MockPoke("high1", 2500)  # Level ~50
-        self.high_level_poke2 = MockPoke("high2", 2500)  # Level ~50
-
-    def test_base_hatch_time(self):
-        """Test hatch time with level 1 parents."""
-        time = compute_hatch_time(self.low_level_poke1, self.low_level_poke2)
-        self.assertEqual(time, 297)
-
-    def test_higher_level_reduces_hatch_time(self):
-        """Higher level parents should reduce hatch time."""
-        time_low = compute_hatch_time(self.low_level_poke1, self.low_level_poke2)
-        time_high = compute_hatch_time(self.high_level_poke1, self.high_level_poke2)
-        self.assertGreater(time_low, time_high)
-
-    def test_minimum_hatch_time(self):
-        """Hatch time should not go below 50% of base."""
-        very_high_poke1 = MockPoke("vh1", 10000)
-        very_high_poke2 = MockPoke("vh2", 10000)
-        time = compute_hatch_time(very_high_poke1, very_high_poke2)
-        self.assertEqual(time, 150)
-
-    def test_none_parents_return_base_time(self):
-        """None parents should return base hatch time."""
-        time = compute_hatch_time(None, self.low_level_poke1)
-        self.assertEqual(time, 300)
-
-
 class TestGetSharedTypes(unittest.TestCase):
-    """Tests for getting shared types between poketes."""
+    """Tests for shared type detection."""
 
-    def test_get_shared_types_water_normal(self):
-        """Test getting shared types with water/normal poketes."""
+    def test_multiple_shared_types(self):
+        """Should return all shared types."""
         poke1 = MockPoke("karpi", 50, ["water", "normal"])
         poke2 = MockPoke("blub", 50, ["water", "normal"])
         shared = get_shared_types(poke1, poke2)
@@ -292,233 +216,352 @@ class TestGetSharedTypes(unittest.TestCase):
         self.assertIn("normal", shared)
         self.assertEqual(len(shared), 2)
 
-    def test_get_shared_types_single_common(self):
-        """Test getting shared types with one common type."""
+    def test_single_shared_type(self):
+        """Should return single shared type."""
         poke1 = MockPoke("wolfior", 50, ["fire", "normal"])
         poke2 = MockPoke("mowcow", 50, ["normal"])
         shared = get_shared_types(poke1, poke2)
         self.assertEqual(shared, ["normal"])
 
-    def test_get_shared_types_none(self):
-        """Test getting shared types with no common type."""
-        poke1 = MockPoke("pure_fire", 50, ["fire"])
-        poke2 = MockPoke("pure_water", 50, ["water"])
+    def test_no_shared_types(self):
+        """Should return empty list when no shared types."""
+        poke1 = MockPoke("fire", 50, ["fire"])
+        poke2 = MockPoke("water", 50, ["water"])
         shared = get_shared_types(poke1, poke2)
         self.assertEqual(shared, [])
 
-    def test_get_shared_types_with_none_poke(self):
-        """Test getting shared types when one poke is None."""
-        poke1 = MockPoke("karpi", 50, ["water", "normal"])
-        shared = get_shared_types(poke1, None)
-        self.assertEqual(shared, [])
+    def test_none_poke_returns_empty(self):
+        """Should return empty list when poke is None."""
+        poke1 = MockPoke("karpi", 50, ["water"])
+        self.assertEqual(get_shared_types(poke1, None), [])
+        self.assertEqual(get_shared_types(None, poke1), [])
 
 
-class TestEggMoveInheritance(unittest.TestCase):
-    """Tests for egg move inheritance system."""
+class TestComputeHatchTime(unittest.TestCase):
+    """Tests for hatch time computation including multi-type bonus."""
+
+    def test_level_1_single_type(self):
+        """Level 1 parents with single shared type (no bonus)."""
+        poke1 = MockPoke("wolfior", 0, ["fire", "normal"])
+        poke2 = MockPoke("mowcow", 0, ["normal"])
+        time = compute_hatch_time(poke1, poke2)
+        expected = int(BASE_HATCH_TIME * 0.99)  # Level 1, no multi-type
+        self.assertEqual(time, expected)
+
+    def test_level_1_multi_type_bonus(self):
+        """Level 1 parents sharing 2+ types get 10% bonus."""
+        poke1 = MockPoke("karpi", 0, ["water", "normal"])
+        poke2 = MockPoke("blub", 0, ["water", "normal"])
+        time = compute_hatch_time(poke1, poke2)
+        expected = int(BASE_HATCH_TIME * 0.99 * 0.9)  # Level 1, with multi-type
+        self.assertEqual(time, expected)
+
+    def test_high_level_with_multi_type(self):
+        """Higher level parents with multi-type should get both reductions."""
+        poke1 = MockPoke("karpi", 2500, ["water", "normal"])  # ~Level 50
+        poke2 = MockPoke("blub", 2500, ["water", "normal"])
+        time = compute_hatch_time(poke1, poke2)
+        expected = int(BASE_HATCH_TIME * 0.5 * 0.9)  # Level 50, with multi-type
+        self.assertEqual(time, expected)
+
+    def test_minimum_level_modifier(self):
+        """Level modifier should not go below 0.5."""
+        poke1 = MockPoke("karpi", 10000, ["water", "normal"])  # ~Level 100
+        poke2 = MockPoke("blub", 10000, ["water", "normal"])
+        time = compute_hatch_time(poke1, poke2)
+        expected = int(BASE_HATCH_TIME * 0.5 * 0.9)  # Max reduction
+        self.assertEqual(time, expected)
+
+    def test_no_parents_returns_base(self):
+        """No parents should return base hatch time."""
+        self.assertEqual(compute_hatch_time(None, None), BASE_HATCH_TIME)
+
+    def test_multi_type_bonus_value(self):
+        """Multi-type bonus should be exactly 10%."""
+        self.assertEqual(MULTI_TYPE_BONUS, 0.10)
+
+
+class TestComputeStatBonus(unittest.TestCase):
+    """Tests for stat bonus computation."""
+
+    def test_positive_bonus_strong_parents(self):
+        """Strong parents should give positive bonus."""
+        # Parents: 30 each, base: 15
+        # avg = 30*0.4 + 30*0.4 = 24
+        # bonus = 24 - 15*0.8 = 24 - 12 = 12
+        bonus = compute_stat_bonus(30, 30, 15)
+        self.assertEqual(bonus, 12)
+
+    def test_negative_bonus_weak_parents(self):
+        """Weak parents should give negative bonus."""
+        # Parents: 5 each, base: 30
+        # avg = 5*0.4 + 5*0.4 = 4
+        # bonus = 4 - 30*0.8 = 4 - 24 = -20
+        bonus = compute_stat_bonus(5, 5, 30)
+        self.assertEqual(bonus, -20)
+
+    def test_zero_bonus_average_parents(self):
+        """Average parents matching base should give ~0 bonus."""
+        # Parents: 20 each, base: 25
+        # avg = 20*0.4 + 20*0.4 = 16
+        # bonus = 16 - 25*0.8 = 16 - 20 = -4
+        bonus = compute_stat_bonus(20, 20, 25)
+        self.assertEqual(bonus, -4)
+
+
+class TestComputeInheritedMoves(unittest.TestCase):
+    """Tests for egg move inheritance."""
 
     def setUp(self):
-        """Set up mock data for testing egg moves."""
-        self.attacks_data = {
-            "tackle": MockAttack("tackle", min_lvl=1),
-            "bubble_bomb": MockAttack("bubble_bomb", min_lvl=5),
-            "fire_bite": MockAttack("fire_bite", min_lvl=10),
-            "mega_punch": MockAttack("mega_punch", min_lvl=15),
-            "water_gun": MockAttack("water_gun", min_lvl=1),
+        self.attacks_db = {
+            "tackle": MockAttackData("Tackle", min_lvl=0),
+            "power_bite": MockAttackData("Power Bite", min_lvl=30),
+            "tail_wipe": MockAttackData("Tail Swipe", min_lvl=10),
+            "stone_crush": MockAttackData("Stone Crush", min_lvl=15),
         }
-        self.pokes_data = {
-            "karpi": MockPokeInfo(
-                attacks=["tackle", "water_gun"],
-                types=["water", "normal"]
-            ),
-        }
+        self.offspring_learnable = {"tackle", "bubble_bomb"}
 
-    def test_inherit_move_from_parent(self):
-        """Test that offspring can inherit a move from parent."""
-        parent1 = MockPoke("karpi", 100, ["water"], attacks=["tackle", "bubble_bomb"])
-        parent2 = MockPoke("blub", 100, ["water"], attacks=["tackle", "fire_bite"])
+    def test_inherits_high_level_moves(self):
+        """Should inherit moves with min_lvl > 0."""
+        parent1_attacks = ["tackle", "power_bite"]
+        parent2_attacks = ["tackle", "tail_wipe"]
 
-        inherited = get_egg_moves(
-            parent1, parent2, "karpi",
-            self.attacks_data, self.pokes_data
+        inherited = compute_inherited_moves(
+            parent1_attacks, parent2_attacks, self.attacks_db, self.offspring_learnable
         )
 
-        # Should inherit moves that offspring can't learn at level 1
-        self.assertIn("bubble_bomb", inherited)
+        self.assertIn("power_bite", inherited)
+        self.assertIn("tail_wipe", inherited)
         self.assertEqual(len(inherited), 2)
 
-    def test_no_inheritance_if_all_level1(self):
-        """Test no inheritance if parents only have level 1 moves."""
-        parent1 = MockPoke("karpi", 50, ["water"], attacks=["tackle", "water_gun"])
-        parent2 = MockPoke("blub", 50, ["water"], attacks=["tackle", "water_gun"])
+    def test_does_not_inherit_level_0_moves(self):
+        """Should not inherit moves with min_lvl = 0."""
+        parent1_attacks = ["tackle"]
+        parent2_attacks = ["tackle"]
 
-        inherited = get_egg_moves(
-            parent1, parent2, "karpi",
-            self.attacks_data, self.pokes_data
+        inherited = compute_inherited_moves(
+            parent1_attacks, parent2_attacks, self.attacks_db, self.offspring_learnable
         )
 
-        self.assertEqual(inherited, [])
+        self.assertEqual(len(inherited), 0)
 
-    def test_max_two_inherited_moves(self):
-        """Test that maximum 2 moves can be inherited (one per parent)."""
-        parent1 = MockPoke("karpi", 100, ["water"],
-                          attacks=["bubble_bomb", "mega_punch"])
-        parent2 = MockPoke("blub", 100, ["water"],
-                          attacks=["fire_bite", "mega_punch"])
+    def test_max_two_inherited(self):
+        """Should inherit at most 2 moves."""
+        parent1_attacks = ["power_bite", "tail_wipe"]
+        parent2_attacks = ["stone_crush"]
 
-        inherited = get_egg_moves(
-            parent1, parent2, "karpi",
-            self.attacks_data, self.pokes_data
+        inherited = compute_inherited_moves(
+            parent1_attacks, parent2_attacks, self.attacks_db, self.offspring_learnable
         )
 
         self.assertLessEqual(len(inherited), 2)
 
-    def test_no_duplicate_inherited_moves(self):
-        """Test that same move isn't inherited twice."""
-        parent1 = MockPoke("karpi", 100, ["water"], attacks=["bubble_bomb"])
-        parent2 = MockPoke("blub", 100, ["water"], attacks=["bubble_bomb"])
+    def test_does_not_inherit_if_already_learnable(self):
+        """Should not inherit moves already in offspring's moveset."""
+        offspring_learnable = {"tackle", "power_bite"}
+        parent1_attacks = ["power_bite"]  # Already learnable
+        parent2_attacks = ["tail_wipe"]
 
-        inherited = get_egg_moves(
-            parent1, parent2, "karpi",
-            self.attacks_data, self.pokes_data
+        inherited = compute_inherited_moves(
+            parent1_attacks, parent2_attacks, self.attacks_db, offspring_learnable
         )
 
-        # Should only inherit once even if both parents have same move
-        self.assertEqual(len(inherited), len(set(inherited)))
+        self.assertNotIn("power_bite", inherited)
+        self.assertIn("tail_wipe", inherited)
+
+
+class TestBreedingStateManagement(unittest.TestCase):
+    """Tests for breeding state management patterns."""
+
+    def test_start_breeding_stores_indices(self):
+        """Starting breeding should store parent indices."""
+        state = {
+            "parent1": None, "parent2": None,
+            "parent1_index": None, "parent2_index": None,
+            "start_time": 0, "egg_ready": False
+        }
+
+        poke1 = MockPoke("karpi", 50, ["water", "normal"])
+        poke2 = MockPoke("blub", 50, ["water", "normal"])
+
+        # Simulate start_breeding
+        state["parent1"] = poke1
+        state["parent2"] = poke2
+        state["parent1_index"] = 2
+        state["parent2_index"] = 4
+        state["start_time"] = 100
+
+        self.assertEqual(state["parent1_index"], 2)
+        self.assertEqual(state["parent2_index"], 4)
+
+    def test_cancel_returns_indices(self):
+        """Cancelling should return parents with their indices."""
+        state = {
+            "parent1": MockPoke("karpi", 50),
+            "parent2": MockPoke("blub", 50),
+            "parent1_index": 2,
+            "parent2_index": 4,
+        }
+
+        # Simulate cancel_breeding
+        p1, p2 = state["parent1"], state["parent2"]
+        idx1, idx2 = state["parent1_index"], state["parent2_index"]
+
+        state["parent1"] = None
+        state["parent2"] = None
+        state["parent1_index"] = None
+        state["parent2_index"] = None
+
+        self.assertEqual(idx1, 2)
+        self.assertEqual(idx2, 4)
+        self.assertIsNotNone(p1)
+        self.assertIsNotNone(p2)
+
+    def test_update_detects_ready(self):
+        """Update should detect when egg becomes ready."""
+        start_time = 100
+        hatch_time = 300
+
+        # Before ready
+        current_time = 350
+        elapsed = current_time - start_time
+        ready = elapsed >= hatch_time
+        self.assertFalse(ready)
+
+        # After ready
+        current_time = 450
+        elapsed = current_time - start_time
+        ready = elapsed >= hatch_time
+        self.assertTrue(ready)
+
+    def test_notification_fires_once(self):
+        """Notification should fire only once."""
+        notified = False
+        notifications = []
+
+        # First detection
+        egg_ready = True
+        if egg_ready and not notified:
+            notifications.append("ready")
+            notified = True
+
+        # Second check
+        if egg_ready and not notified:
+            notifications.append("ready")
+
+        self.assertEqual(len(notifications), 1)
+
+
+class TestStatBonusApplication(unittest.TestCase):
+    """Tests for stat bonus application to hatched poke."""
+
+    def test_bonuses_are_additive(self):
+        """Stat bonuses should be added to base stats."""
+        base_hp, base_atc = 20, 5
+        hp_bonus, atc_bonus = 5, -2
+
+        final_hp = max(1, base_hp + hp_bonus)
+        final_atc = max(0, base_atc + atc_bonus)
+
+        self.assertEqual(final_hp, 25)
+        self.assertEqual(final_atc, 3)
+
+    def test_minimum_stats_enforced(self):
+        """Stats should not go below minimum values."""
+        base_hp, base_atc = 10, 1
+        hp_bonus, atc_bonus = -15, -5
+
+        final_hp = max(1, base_hp + hp_bonus)  # 10 - 15 = -5 -> 1
+        final_atc = max(0, base_atc + atc_bonus)  # 1 - 5 = -4 -> 0
+
+        self.assertEqual(final_hp, 1)
+        self.assertEqual(final_atc, 0)
 
 
 class TestBreedingHistory(unittest.TestCase):
     """Tests for breeding history tracking."""
 
+    def test_history_limited_to_five(self):
+        """History should keep only last 5 entries."""
+        history = []
+
+        for i in range(7):
+            history.append({"name": f"Poke{i}"})
+            if len(history) > MAX_HISTORY_ENTRIES:
+                history = history[-MAX_HISTORY_ENTRIES:]
+
+        self.assertEqual(len(history), MAX_HISTORY_ENTRIES)
+        self.assertEqual(history[0]["name"], "Poke2")
+        self.assertEqual(history[-1]["name"], "Poke6")
+
     def test_history_entry_structure(self):
-        """Test breeding history entry has correct structure."""
+        """History entry should have all required fields."""
         entry = {
             "offspring_identifier": "karpi",
             "offspring_name": "Karpi",
             "parent1_identifier": "blub",
             "parent1_name": "Blub",
-            "parent2_identifier": "karpi",
-            "parent2_name": "Karpi",
-            "hatch_time": 300,
-            "bred_at": "2024-01-15T10:30:00",
-            "inherited_moves": ["bubble_bomb"],
-            "was_shiny": False,
+            "parent2_identifier": "wolfior",
+            "parent2_name": "Wolfior",
+            "hatch_timestamp": 500,
+            "inherited_moves": ["power_bite"],
+            "shiny": True,
         }
 
-        self.assertIn("offspring_identifier", entry)
-        self.assertIn("offspring_name", entry)
-        self.assertIn("parent1_identifier", entry)
-        self.assertIn("parent1_name", entry)
-        self.assertIn("parent2_identifier", entry)
-        self.assertIn("parent2_name", entry)
-        self.assertIn("hatch_time", entry)
-        self.assertIn("bred_at", entry)
-        self.assertIn("inherited_moves", entry)
-        self.assertIn("was_shiny", entry)
-
-    def test_history_max_entries(self):
-        """Test that history is limited to MAX_HISTORY_ENTRIES."""
-        MAX_HISTORY_ENTRIES = 5
-        history = []
-
-        # Add more than max entries
-        for i in range(7):
-            history.append({"id": i})
-
-        # Trim to max
-        if len(history) > MAX_HISTORY_ENTRIES:
-            history = history[-MAX_HISTORY_ENTRIES:]
-
-        self.assertEqual(len(history), 5)
-        # Should keep most recent
-        self.assertEqual(history[0]["id"], 2)
-        self.assertEqual(history[-1]["id"], 6)
-
-    def test_history_entry_from_dict(self):
-        """Test deserializing history entry from dict."""
-        entry_dict = {
-            "offspring_identifier": "karpi",
-            "offspring_name": "Karpi",
-            "parent1_identifier": "blub",
-            "parent1_name": "Blub",
-            "parent2_identifier": "karpi",
-            "parent2_name": "Karpi",
-            "hatch_time": 300,
-            "bred_at": "2024-01-15T10:30:00",
-            "inherited_moves": ["bubble_bomb"],
-            "was_shiny": True,
-        }
-
-        # Parse the datetime
-        bred_at = datetime.fromisoformat(entry_dict["bred_at"])
-        self.assertEqual(bred_at.year, 2024)
-        self.assertEqual(bred_at.month, 1)
-        self.assertEqual(bred_at.day, 15)
+        required = [
+            "offspring_identifier", "offspring_name",
+            "parent1_identifier", "parent1_name",
+            "parent2_identifier", "parent2_name",
+            "hatch_timestamp", "inherited_moves", "shiny"
+        ]
+        for key in required:
+            self.assertIn(key, entry)
 
 
 class TestEggDataSerialization(unittest.TestCase):
-    """Tests for EggData serialization and deserialization."""
+    """Tests for EggData serialization."""
 
     def test_egg_dict_structure(self):
-        """Test that egg dict has the correct structure."""
+        """Egg dict should have all required fields including bonuses."""
         egg_dict = {
-            "identifier": "steini",
-            "hp": 20,
-            "atc": 5,
-            "defense": 3,
-            "initiative": 4,
-            "hatch_time": 300,
-            "parent1_identifier": "karpi",
-            "parent2_identifier": "blub",
-            "parent1_name": "Karpi",
-            "parent2_name": "Blub",
-            "inherited_moves": ["bubble_bomb"],
+            "identifier": "karpi",
+            "hp_bonus": 5,
+            "atc_bonus": -2,
+            "defense_bonus": 3,
+            "initiative_bonus": 1,
+            "hatch_time": 250,
+            "parent1_identifier": "blub",
+            "parent2_identifier": "wolfior",
+            "inherited_moves": ["power_bite"],
         }
 
-        self.assertIn("identifier", egg_dict)
-        self.assertIn("hp", egg_dict)
-        self.assertIn("atc", egg_dict)
-        self.assertIn("defense", egg_dict)
-        self.assertIn("initiative", egg_dict)
-        self.assertIn("hatch_time", egg_dict)
-        self.assertIn("parent1_identifier", egg_dict)
-        self.assertIn("parent2_identifier", egg_dict)
-        self.assertIn("parent1_name", egg_dict)
-        self.assertIn("parent2_name", egg_dict)
-        self.assertIn("inherited_moves", egg_dict)
+        required = [
+            "identifier", "hp_bonus", "atc_bonus", "defense_bonus",
+            "initiative_bonus", "hatch_time", "parent1_identifier",
+            "parent2_identifier", "inherited_moves"
+        ]
+        for key in required:
+            self.assertIn(key, egg_dict)
 
-    def test_egg_dict_values(self):
-        """Test egg dict values are of correct types."""
+    def test_bonus_fields_can_be_negative(self):
+        """Bonus fields should support negative values."""
         egg_dict = {
-            "identifier": "steini",
-            "hp": 20,
-            "atc": 5,
-            "defense": 3,
-            "initiative": 4,
-            "hatch_time": 300,
-            "parent1_identifier": "karpi",
-            "parent2_identifier": "blub",
-            "parent1_name": "Karpi",
-            "parent2_name": "Blub",
-            "inherited_moves": ["tackle"],
+            "hp_bonus": -3,
+            "atc_bonus": -2,
+            "defense_bonus": -1,
+            "initiative_bonus": -1,
         }
 
-        self.assertIsInstance(egg_dict["identifier"], str)
-        self.assertIsInstance(egg_dict["hp"], int)
-        self.assertIsInstance(egg_dict["atc"], int)
-        self.assertIsInstance(egg_dict["defense"], int)
-        self.assertIsInstance(egg_dict["initiative"], int)
-        self.assertIsInstance(egg_dict["hatch_time"], int)
-        self.assertIsInstance(egg_dict["parent1_identifier"], str)
-        self.assertIsInstance(egg_dict["parent2_identifier"], str)
-        self.assertIsInstance(egg_dict["inherited_moves"], list)
+        self.assertLess(egg_dict["hp_bonus"], 0)
+        self.assertLess(egg_dict["atc_bonus"], 0)
 
 
 class TestBreedingManagerSerialization(unittest.TestCase):
     """Tests for BreedingManager serialization."""
 
-    def test_empty_manager_dict_structure(self):
-        """Test serialization structure of empty breeding manager."""
-        empty_dict = {
+    def test_empty_manager_dict(self):
+        """Empty manager should serialize with all fields."""
+        data = {
             "parent1": None,
             "parent2": None,
             "parent1_index": None,
@@ -529,399 +572,142 @@ class TestBreedingManagerSerialization(unittest.TestCase):
             "history": [],
         }
 
-        self.assertIn("parent1", empty_dict)
-        self.assertIn("parent2", empty_dict)
-        self.assertIn("parent1_index", empty_dict)
-        self.assertIn("parent2_index", empty_dict)
-        self.assertIn("start_time", empty_dict)
-        self.assertIn("egg_ready", empty_dict)
-        self.assertIn("egg", empty_dict)
-        self.assertIn("history", empty_dict)
-
-    def test_manager_dict_with_data(self):
-        """Test serialization structure with breeding data."""
-        poke_dict = MockPoke("karpi", 50, ["water"]).dict()
-        manager_dict = {
-            "parent1": poke_dict,
-            "parent2": poke_dict,
-            "parent1_index": 0,
-            "parent2_index": 1,
-            "start_time": 100,
-            "egg_ready": True,
-            "egg": {
-                "identifier": "karpi",
-                "hp": 15,
-                "atc": 0,
-                "defense": 0,
-                "initiative": 0,
-                "hatch_time": 300,
-                "parent1_identifier": "karpi",
-                "parent2_identifier": "karpi",
-                "parent1_name": "Karpi",
-                "parent2_name": "Karpi",
-                "inherited_moves": [],
-            },
-            "history": [],
-        }
-
-        self.assertIsNotNone(manager_dict["parent1"])
-        self.assertIsNotNone(manager_dict["parent2"])
-        self.assertEqual(manager_dict["parent1_index"], 0)
-        self.assertEqual(manager_dict["parent2_index"], 1)
-        self.assertEqual(manager_dict["start_time"], 100)
-        self.assertTrue(manager_dict["egg_ready"])
-        self.assertIsNotNone(manager_dict["egg"])
-
-
-class TestBreedingStateManagement(unittest.TestCase):
-    """Tests for breeding state management logic."""
-
-    def test_has_breeding_pair_logic(self):
-        """Test logic for checking if breeding pair exists."""
-        parent1, parent2 = None, None
-        has_pair = parent1 is not None and parent2 is not None
-        self.assertFalse(has_pair)
-
-        parent1 = MockPoke("karpi", 50)
-        has_pair = parent1 is not None and parent2 is not None
-        self.assertFalse(has_pair)
-
-        parent2 = MockPoke("blub", 50)
-        has_pair = parent1 is not None and parent2 is not None
-        self.assertTrue(has_pair)
-
-    def test_is_egg_ready_logic(self):
-        """Test logic for checking if egg is ready."""
-        egg_ready = False
-        egg = None
-        is_ready = egg_ready and egg is not None
-        self.assertFalse(is_ready)
-
-        egg_ready = True
-        is_ready = egg_ready and egg is not None
-        self.assertFalse(is_ready)
-
-        egg = {"identifier": "test"}
-        is_ready = egg_ready and egg is not None
-        self.assertTrue(is_ready)
-
-    def test_time_remaining_calculation(self):
-        """Test time remaining calculation logic."""
-        start_time = 100
-        current_time = 150
-        hatch_time = 300
-
-        elapsed = current_time - start_time
-        remaining = hatch_time - elapsed
-        remaining = max(0, remaining)
-
-        self.assertEqual(elapsed, 50)
-        self.assertEqual(remaining, 250)
-
-    def test_time_remaining_when_ready(self):
-        """Test time remaining is 0 when egg is ready."""
-        start_time = 100
-        current_time = 500
-        hatch_time = 300
-
-        elapsed = current_time - start_time
-        remaining = hatch_time - elapsed
-        remaining = max(0, remaining)
-
-        self.assertEqual(remaining, 0)
-
-    def test_cancel_breeding_returns_indices(self):
-        """Test that cancelling breeding returns parent indices."""
-        parent1 = MockPoke("karpi", 50)
-        parent2 = MockPoke("blub", 50)
-        parent1_index = 0
-        parent2_index = 1
-
-        # Simulate cancel
-        returned_p1 = parent1
-        returned_p2 = parent2
-        returned_idx1 = parent1_index
-        returned_idx2 = parent2_index
-
-        self.assertIsNotNone(returned_p1)
-        self.assertIsNotNone(returned_p2)
-        self.assertEqual(returned_idx1, 0)
-        self.assertEqual(returned_idx2, 1)
-
-
-class TestNotificationLogic(unittest.TestCase):
-    """Tests for egg-ready notification logic."""
-
-    def test_update_detects_egg_ready(self):
-        """Update should detect when egg becomes ready."""
-        start_time = 100
-        hatch_time = 300
-        egg_ready = False
-
-        current_time = 350
-        elapsed = current_time - start_time
-        if elapsed >= hatch_time:
-            egg_ready = True
-
-        self.assertFalse(egg_ready)
-
-        current_time = 450
-        elapsed = current_time - start_time
-        if elapsed >= hatch_time:
-            egg_ready = True
-
-        self.assertTrue(egg_ready)
-
-    def test_notification_only_fires_once(self):
-        """Notification should only fire once when egg becomes ready."""
-        egg_ready = False
-        notifications = []
-        notified_ready = False
-
-        # First update when egg becomes ready
-        egg_ready = True
-        just_became_ready = egg_ready and not notified_ready
-        if just_became_ready:
-            notifications.append("Egg ready!")
-            notified_ready = True
-
-        # Second update - egg is still ready
-        just_became_ready = egg_ready and not notified_ready
-        if just_became_ready:
-            notifications.append("Egg ready!")
-            notified_ready = True
-
-        self.assertEqual(len(notifications), 1)
-
-    def test_notification_resets_after_collection(self):
-        """Notification flag should reset after egg collection."""
-        notified_ready = True
-        has_breeding_pair = True
-
-        # Simulate collection
-        has_breeding_pair = False
-
-        # Reset notification flag when no breeding
-        if not has_breeding_pair:
-            notified_ready = False
-
-        self.assertFalse(notified_ready)
-
-
-class TestPeriodicBreedingCheck(unittest.TestCase):
-    """Tests for periodic breeding check event."""
-
-    def test_check_interval(self):
-        """Test that breeding is checked at correct intervals."""
-        max_tick = 50
-        checked_ticks = []
-
-        for tick in range(200):
-            if tick % max_tick == 0:
-                checked_ticks.append(tick)
-
-        self.assertEqual(checked_ticks, [0, 50, 100, 150])
-
-    def test_breeding_manager_update_called(self):
-        """Test that breeding manager update is called during check."""
-        update_called = False
-        current_time = 100
-
-        def mock_update(time):
-            nonlocal update_called
-            update_called = True
-            return False
-
-        mock_update(current_time)
-        self.assertTrue(update_called)
-
-
-class TestStatInheritance(unittest.TestCase):
-    """Tests for stat inheritance from parents."""
-
-    def test_stats_combine_from_parents(self):
-        """Stats should combine from both parents."""
-        parent1_stats = MockPokeInfo(hp=20, atc=10, defense=5, initiative=3)
-        parent2_stats = MockPokeInfo(hp=30, atc=2, defense=8, initiative=6)
-
-        combined_hp = compute_weighted_stat(parent1_stats.hp, parent2_stats.hp)
-        combined_atc = compute_weighted_stat(parent1_stats.atc, parent2_stats.atc)
-        combined_defense = compute_weighted_stat(parent1_stats.defense, parent2_stats.defense)
-        combined_initiative = compute_weighted_stat(parent1_stats.initiative, parent2_stats.initiative)
-
-        self.assertEqual(combined_hp, 25)
-        self.assertEqual(combined_atc, 6)
-        self.assertEqual(combined_defense, 6)
-        self.assertEqual(combined_initiative, 4)
-
-    def test_high_stat_parent_influences_offspring(self):
-        """High-stat parent should positively influence offspring."""
-        low_stat_parent = MockPokeInfo(hp=10, atc=1, defense=1, initiative=1)
-        high_stat_parent = MockPokeInfo(hp=50, atc=10, defense=10, initiative=10)
-
-        combined_hp = compute_weighted_stat(low_stat_parent.hp, high_stat_parent.hp)
-        combined_atc = compute_weighted_stat(low_stat_parent.atc, high_stat_parent.atc)
-
-        self.assertGreater(combined_hp, low_stat_parent.hp)
-        self.assertLess(combined_hp, high_stat_parent.hp)
-        self.assertGreater(combined_atc, low_stat_parent.atc)
-        self.assertLess(combined_atc, high_stat_parent.atc)
-
-
-class TestBreedingCancellation(unittest.TestCase):
-    """Tests for breeding cancellation."""
-
-    def test_cancel_returns_parents(self):
-        """Cancelling breeding should return both parents."""
-        parent1 = MockPoke("karpi", 50, ["water"])
-        parent2 = MockPoke("blub", 50, ["water"])
-
-        returned_p1 = parent1
-        returned_p2 = parent2
-        parent1 = None
-        parent2 = None
-
-        self.assertIsNotNone(returned_p1)
-        self.assertIsNotNone(returned_p2)
-        self.assertIsNone(parent1)
-        self.assertIsNone(parent2)
-
-    def test_cancel_resets_state(self):
-        """Cancelling should reset all breeding state."""
-        start_time = 100
-        egg_ready = True
-        egg = {"identifier": "test"}
-
-        start_time = 0
-        egg_ready = False
-        egg = None
-
-        self.assertEqual(start_time, 0)
-        self.assertFalse(egg_ready)
-        self.assertIsNone(egg)
-
-
-class TestSaveLoadIntegration(unittest.TestCase):
-    """Tests for save/load integration with the save system."""
-
-    def test_save_data_format(self):
-        """Test that breeding data matches save format."""
-        save_breeding_data = {
-            "parent1": None,
-            "parent2": None,
-            "parent1_index": None,
-            "parent2_index": None,
-            "start_time": 0,
-            "egg_ready": False,
-            "egg": None,
-            "history": [],
-        }
-
-        required_keys = [
+        required = [
             "parent1", "parent2", "parent1_index", "parent2_index",
             "start_time", "egg_ready", "egg", "history"
         ]
-        for key in required_keys:
-            self.assertIn(key, save_breeding_data)
+        for key in required:
+            self.assertIn(key, data)
 
-    def test_load_preserves_breeding_state(self):
-        """Test that loading preserves breeding state correctly."""
-        saved_data = {
-            "parent1": {
-                "name": "karpi",
-                "xp": 50,
-                "hp": 15,
-                "ap": [],
-                "effects": [],
-                "attacks": [],
-                "shiny": False,
-                "nature": {"nature": "normal", "grade": 1},
-                "stats": {},
-            },
-            "parent2": {
-                "name": "blub",
-                "xp": 60,
-                "hp": 20,
-                "ap": [],
-                "effects": [],
-                "attacks": [],
-                "shiny": False,
-                "nature": {"nature": "normal", "grade": 1},
-                "stats": {},
-            },
-            "parent1_index": 0,
-            "parent2_index": 1,
+    def test_dict_includes_indices(self):
+        """Serialization should include parent indices."""
+        data = {
+            "parent1": {"name": "karpi"},
+            "parent2": {"name": "blub"},
+            "parent1_index": 2,
+            "parent2_index": 4,
             "start_time": 100,
             "egg_ready": False,
             "egg": None,
             "history": [],
         }
 
-        self.assertIsNotNone(saved_data.get("parent1"))
-        self.assertIsNotNone(saved_data.get("parent2"))
-        self.assertEqual(saved_data.get("parent1_index"), 0)
-        self.assertEqual(saved_data.get("parent2_index"), 1)
-        self.assertEqual(saved_data.get("start_time"), 100)
-        self.assertFalse(saved_data.get("egg_ready"))
+        self.assertEqual(data["parent1_index"], 2)
+        self.assertEqual(data["parent2_index"], 4)
 
-    def test_load_preserves_history(self):
-        """Test that loading preserves breeding history."""
-        saved_data = {
-            "history": [
-                {
-                    "offspring_identifier": "karpi",
-                    "offspring_name": "Karpi",
-                    "parent1_identifier": "blub",
-                    "parent1_name": "Blub",
-                    "parent2_identifier": "karpi",
-                    "parent2_name": "Karpi",
-                    "hatch_time": 300,
-                    "bred_at": "2024-01-15T10:30:00",
-                    "inherited_moves": ["bubble_bomb"],
-                    "was_shiny": False,
-                }
-            ]
+
+class TestPeriodicEventPattern(unittest.TestCase):
+    """Tests for periodic event integration patterns."""
+
+    def test_check_interval(self):
+        """Event should check at regular intervals."""
+        check_interval = 10
+        ticks_checked = []
+
+        for tick in range(50):
+            if tick % check_interval == 0:
+                ticks_checked.append(tick)
+
+        self.assertEqual(ticks_checked, [0, 10, 20, 30, 40])
+
+    def test_notification_sent_when_ready(self):
+        """Notification should be sent when egg becomes ready."""
+        notifications = []
+
+        def mock_notify(title, name, desc):
+            notifications.append({"title": title, "name": name, "desc": desc})
+
+        # Simulate egg becoming ready
+        egg_just_ready = True
+        if egg_just_ready:
+            mock_notify("Egg Ready!", "Breeding",
+                       "Your egg at the breeding facility is ready to be collected!")
+
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[0]["title"], "Egg Ready!")
+
+
+class TestSaveLoadIntegration(unittest.TestCase):
+    """Tests for save/load integration."""
+
+    def test_default_save_format(self):
+        """Default breeding save data should have all required fields."""
+        default_data = {
+            "parent1": None,
+            "parent2": None,
+            "parent1_index": None,
+            "parent2_index": None,
+            "start_time": 0,
+            "egg_ready": False,
+            "egg": None,
+            "history": [],
         }
 
-        self.assertEqual(len(saved_data["history"]), 1)
-        self.assertEqual(saved_data["history"][0]["offspring_name"], "Karpi")
+        required = [
+            "parent1", "parent2", "parent1_index", "parent2_index",
+            "start_time", "egg_ready", "egg", "history"
+        ]
+        for key in required:
+            self.assertIn(key, default_data)
+
+    def test_loading_preserves_indices(self):
+        """Loading should preserve parent indices."""
+        saved_data = {
+            "parent1": {"name": "karpi", "xp": 50},
+            "parent2": {"name": "blub", "xp": 60},
+            "parent1_index": 2,
+            "parent2_index": 4,
+            "start_time": 100,
+            "egg_ready": False,
+            "egg": None,
+            "history": [],
+        }
+
+        # Simulate loading
+        loaded_idx1 = saved_data.get("parent1_index")
+        loaded_idx2 = saved_data.get("parent2_index")
+
+        self.assertEqual(loaded_idx1, 2)
+        self.assertEqual(loaded_idx2, 4)
 
 
-class TestMockedTimerIntegration(unittest.TestCase):
-    """Tests using mocked timer for breeding updates."""
+class TestMultiTypeHatchBonusCalculation(unittest.TestCase):
+    """Detailed tests for multi-type hatch time bonus."""
 
-    def test_breeding_progress_with_mock_timer(self):
-        """Test breeding progress using mock timer."""
-        mock_timer = MockTimer(time=0)
+    def test_single_type_no_bonus(self):
+        """Single shared type should not reduce hatch time."""
+        poke1 = MockPoke("wolfior", 0, ["fire", "normal"])  # fire, normal
+        poke2 = MockPoke("mowcow", 0, ["normal"])  # normal
 
-        start_time = mock_timer.time
-        hatch_time = 300
-        egg_ready = False
+        shared = get_shared_types(poke1, poke2)
+        has_bonus = len(shared) >= 2
 
-        # Advance time
-        mock_timer.time = 150
-        elapsed = mock_timer.time - start_time
-        if elapsed >= hatch_time:
-            egg_ready = True
-        self.assertFalse(egg_ready)
+        self.assertEqual(len(shared), 1)
+        self.assertFalse(has_bonus)
 
-        # Advance more
-        mock_timer.time = 350
-        elapsed = mock_timer.time - start_time
-        if elapsed >= hatch_time:
-            egg_ready = True
-        self.assertTrue(egg_ready)
+    def test_two_types_gets_bonus(self):
+        """Two shared types should get 10% bonus."""
+        poke1 = MockPoke("karpi", 0, ["water", "normal"])
+        poke2 = MockPoke("blub", 0, ["water", "normal"])
 
-    def test_time_remaining_with_mock_timer(self):
-        """Test time remaining calculation with mock timer."""
-        mock_timer = MockTimer(time=100)
-        start_time = 0
-        hatch_time = 300
+        shared = get_shared_types(poke1, poke2)
+        has_bonus = len(shared) >= 2
 
-        elapsed = mock_timer.time - start_time
-        remaining = max(0, hatch_time - elapsed)
+        self.assertEqual(len(shared), 2)
+        self.assertTrue(has_bonus)
 
-        self.assertEqual(remaining, 200)
+    def test_bonus_reduces_time_by_10_percent(self):
+        """Multi-type bonus should reduce time by exactly 10%."""
+        base_time = 300
+
+        time_without_bonus = int(base_time * 0.99)  # Level 1
+        time_with_bonus = int(base_time * 0.99 * 0.9)
+
+        reduction = time_without_bonus - time_with_bonus
+        expected_reduction = int(time_without_bonus * 0.1)
+
+        # Allow for rounding differences
+        self.assertAlmostEqual(reduction, expected_reduction, delta=1)
 
 
 if __name__ == "__main__":

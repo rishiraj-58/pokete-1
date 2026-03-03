@@ -24,25 +24,23 @@ class BreedingHistoryEntryDict(TypedDict):
     parent1_name: str
     parent2_identifier: str
     parent2_name: str
-    hatch_time: int
-    bred_at: str
+    hatch_timestamp: int
     inherited_moves: list[str]
-    was_shiny: bool
+    shiny: bool
 
 
 @dataclass
 class BreedingHistoryEntry:
-    """A record of a completed breeding."""
+    """Record of a completed breeding."""
     offspring_identifier: str
     offspring_name: str
     parent1_identifier: str
     parent1_name: str
     parent2_identifier: str
     parent2_name: str
-    hatch_time: int
-    bred_at: datetime
+    hatch_timestamp: int
     inherited_moves: list[str]
-    was_shiny: bool
+    shiny: bool
 
     def dict(self) -> BreedingHistoryEntryDict:
         return {
@@ -52,10 +50,9 @@ class BreedingHistoryEntry:
             "parent1_name": self.parent1_name,
             "parent2_identifier": self.parent2_identifier,
             "parent2_name": self.parent2_name,
-            "hatch_time": self.hatch_time,
-            "bred_at": self.bred_at.isoformat(),
+            "hatch_timestamp": self.hatch_timestamp,
             "inherited_moves": self.inherited_moves,
-            "was_shiny": self.was_shiny,
+            "shiny": self.shiny,
         }
 
     @classmethod
@@ -67,10 +64,9 @@ class BreedingHistoryEntry:
             parent1_name=data["parent1_name"],
             parent2_identifier=data["parent2_identifier"],
             parent2_name=data["parent2_name"],
-            hatch_time=data["hatch_time"],
-            bred_at=datetime.fromisoformat(data["bred_at"]),
+            hatch_timestamp=data["hatch_timestamp"],
             inherited_moves=data.get("inherited_moves", []),
-            was_shiny=data.get("was_shiny", False),
+            shiny=data.get("shiny", False),
         )
 
 
@@ -89,45 +85,43 @@ class BreedingPairDict(TypedDict):
 class EggDict(TypedDict):
     """Serialization format for an egg."""
     identifier: str
-    hp: int
-    atc: int
-    defense: int
-    initiative: int
+    hp_bonus: int
+    atc_bonus: int
+    defense_bonus: int
+    initiative_bonus: int
     hatch_time: int
     parent1_identifier: str
     parent2_identifier: str
-    parent1_name: str
-    parent2_name: str
     inherited_moves: list[str]
 
 
 @dataclass
 class EggData:
-    """Holds computed egg data before it becomes a full Poke."""
+    """Holds computed egg data before it becomes a full Poke.
+
+    The bonus stats represent additional stats inherited from parents
+    that will be added on top of the base species stats.
+    """
     identifier: str
-    hp: int
-    atc: int
-    defense: int
-    initiative: int
+    hp_bonus: int
+    atc_bonus: int
+    defense_bonus: int
+    initiative_bonus: int
     hatch_time: int
     parent1_identifier: str
     parent2_identifier: str
-    parent1_name: str
-    parent2_name: str
     inherited_moves: list[str] = field(default_factory=list)
 
     def dict(self) -> EggDict:
         return {
             "identifier": self.identifier,
-            "hp": self.hp,
-            "atc": self.atc,
-            "defense": self.defense,
-            "initiative": self.initiative,
+            "hp_bonus": self.hp_bonus,
+            "atc_bonus": self.atc_bonus,
+            "defense_bonus": self.defense_bonus,
+            "initiative_bonus": self.initiative_bonus,
             "hatch_time": self.hatch_time,
             "parent1_identifier": self.parent1_identifier,
             "parent2_identifier": self.parent2_identifier,
-            "parent1_name": self.parent1_name,
-            "parent2_name": self.parent2_name,
             "inherited_moves": self.inherited_moves,
         }
 
@@ -135,23 +129,23 @@ class EggData:
     def from_dict(cls, data: EggDict) -> "EggData":
         return cls(
             identifier=data["identifier"],
-            hp=data["hp"],
-            atc=data["atc"],
-            defense=data["defense"],
-            initiative=data["initiative"],
+            hp_bonus=data.get("hp_bonus", 0),
+            atc_bonus=data.get("atc_bonus", 0),
+            defense_bonus=data.get("defense_bonus", 0),
+            initiative_bonus=data.get("initiative_bonus", 0),
             hatch_time=data["hatch_time"],
             parent1_identifier=data["parent1_identifier"],
             parent2_identifier=data["parent2_identifier"],
-            parent1_name=data.get("parent1_name", ""),
-            parent2_name=data.get("parent2_name", ""),
             inherited_moves=data.get("inherited_moves", []),
         )
 
 
 # Base hatching time in game ticks (can be adjusted for balance)
 BASE_HATCH_TIME = 300
-# Maximum number of breeding history entries to keep
+# Maximum breeding history entries to keep
 MAX_HISTORY_ENTRIES = 5
+# Multi-type bonus reduction (10% faster when sharing 2+ types)
+MULTI_TYPE_BONUS = 0.10
 
 
 class BreedingManager:
@@ -171,6 +165,7 @@ class BreedingManager:
         self.egg_ready: bool = False
         self.egg: EggData | None = None
         self.history: list[BreedingHistoryEntry] = []
+        self._notified: bool = False
 
     def can_breed(self, poke1: Poke, poke2: Poke) -> bool:
         """Check if two poketes are compatible for breeding.
@@ -196,10 +191,16 @@ class BreedingManager:
         return list(types1 & types2)
 
     def start_breeding(
-        self, poke1: Poke, poke2: Poke, current_time: int,
-        poke1_index: int | None = None, poke2_index: int | None = None
+        self, poke1: Poke, poke2: Poke, index1: int, index2: int, current_time: int
     ) -> bool:
         """Start breeding two poketes if they are compatible.
+
+        Args:
+            poke1: First parent pokete
+            poke2: Second parent pokete
+            index1: Index of first parent in player's team
+            index2: Index of second parent in player's team
+            current_time: Current game time
 
         Returns True if breeding started successfully, False otherwise.
         """
@@ -211,20 +212,31 @@ class BreedingManager:
 
         self.parent1 = poke1
         self.parent2 = poke2
-        self.parent1_index = poke1_index
-        self.parent2_index = poke2_index
+        self.parent1_index = index1
+        self.parent2_index = index2
         self.start_time = current_time
         self.egg_ready = False
         self.egg = None
+        self._notified = False
         return True
 
-    def _compute_weighted_stat(
-        self, stat1: int, stat2: int, weight1: float = 0.5, weight2: float = 0.5
+    def _compute_stat_bonus(
+        self, stat1: int, stat2: int, base_stat: int
     ) -> int:
-        """Compute weighted average of two stats with some random variation."""
-        base = stat1 * weight1 + stat2 * weight2
-        variation = random.uniform(-0.1, 0.1) * base
-        return max(1, int(base + variation))
+        """Compute bonus stat from parents compared to base species.
+
+        The bonus is the difference between the weighted parent average
+        and the base species stat, with some random variation.
+        """
+        # Weighted average: 40% from each parent
+        parent_avg = stat1 * 0.4 + stat2 * 0.4
+        # Add random variation of ±10%
+        variation = random.uniform(-0.1, 0.1) * parent_avg
+        inherited = parent_avg + variation
+
+        # Bonus is the difference from base (can be negative or positive)
+        bonus = int(inherited - base_stat * 0.8)
+        return bonus
 
     def _select_offspring_identifier(self) -> str:
         """Select which pokete the offspring will be based on."""
@@ -260,50 +272,55 @@ class BreedingManager:
 
         return random.choices(candidates, weights=weights, k=1)[0]
 
-    def _get_egg_moves(self, offspring_id: str) -> list[str]:
-        """Get moves that the egg can inherit from parents.
+    def _compute_inherited_moves(self, offspring_identifier: str) -> list[str]:
+        """Compute which moves the offspring inherits from parents.
 
-        Each parent can contribute up to 1 move that the offspring
-        cannot learn at level 1.
+        The child can inherit up to 1 move from each parent that it couldn't
+        learn at level 1 (min_lvl > 0).
         """
         if self.parent1 is None or self.parent2 is None:
             return []
 
         attacks = asset_service.get_base_assets().attacks
         pokes = asset_service.get_base_assets().pokes
-        offspring_info = pokes.get(offspring_id)
+        offspring_info = pokes.get(offspring_identifier)
 
         if offspring_info is None:
             return []
 
-        # Get attacks the offspring can learn at level 1
-        level1_attacks = set(
-            atk for atk in offspring_info.attacks
-            if attacks.get(atk) and attacks[atk].min_lvl <= 1
-        )
+        # Get the attacks the offspring can naturally learn
+        offspring_learnable = set(offspring_info.attacks + offspring_info.pool)
 
-        inherited_moves = []
+        inherited = []
 
         # Try to inherit one move from each parent
         for parent in [self.parent1, self.parent2]:
-            if len(inherited_moves) >= 2:
+            if len(inherited) >= 2:
                 break
 
-            # Get parent's current attacks that offspring can't learn at level 1
-            candidate_moves = [
-                atk for atk in parent.attacks
-                if atk not in level1_attacks
-                and atk not in inherited_moves
-                and attacks.get(atk) is not None
-            ]
+            # Get parent's current attacks that have min_lvl > 0
+            eligible_attacks = []
+            for atk_name in parent.attacks:
+                if atk_name in attacks:
+                    atk_data = attacks[atk_name]
+                    # Must have min_lvl > 0 (not learnable at birth)
+                    # and not already in offspring's natural moveset
+                    if atk_data.min_lvl > 0 and atk_name not in offspring_learnable:
+                        eligible_attacks.append(atk_name)
 
-            if candidate_moves:
-                inherited_moves.append(random.choice(candidate_moves))
+            if eligible_attacks:
+                chosen = random.choice(eligible_attacks)
+                if chosen not in inherited:
+                    inherited.append(chosen)
 
-        return inherited_moves
+        return inherited
 
     def compute_hatch_time(self) -> int:
-        """Compute how long the egg needs to hatch based on parents."""
+        """Compute how long the egg needs to hatch based on parents.
+
+        Higher level parents reduce hatch time. Sharing 2+ types gives
+        a 10% bonus reduction.
+        """
         if self.parent1 is None or self.parent2 is None:
             return BASE_HATCH_TIME
 
@@ -311,7 +328,12 @@ class BreedingManager:
         avg_level = (self.parent1.lvl() + self.parent2.lvl()) / 2
         # Higher level parents = slightly faster hatching
         level_modifier = max(0.5, 1.0 - (avg_level / 100))
-        return int(BASE_HATCH_TIME * level_modifier)
+
+        # Multi-type bonus: 10% reduction when sharing 2+ types
+        shared_types = self.get_shared_types(self.parent1, self.parent2)
+        type_modifier = 1.0 - MULTI_TYPE_BONUS if len(shared_types) >= 2 else 1.0
+
+        return int(BASE_HATCH_TIME * level_modifier * type_modifier)
 
     def generate_egg(self) -> EggData | None:
         """Generate egg data based on the breeding pair."""
@@ -322,39 +344,31 @@ class BreedingManager:
         offspring_id = self._select_offspring_identifier()
         base_poke = pokes[offspring_id]
 
-        # Compute stats as weighted average of parents' base stats + offspring base
+        # Compute stat bonuses from parents
         p1_inf = self.parent1.inf
         p2_inf = self.parent2.inf
 
-        # Weight: 40% parent1, 40% parent2, 20% base offspring stats
-        hp = self._compute_weighted_stat(p1_inf.hp, p2_inf.hp, 0.4, 0.4)
-        hp = int(hp * 0.8 + base_poke.hp * 0.2)
-
-        atc = self._compute_weighted_stat(p1_inf.atc, p2_inf.atc, 0.4, 0.4)
-        atc = int(atc * 0.8 + base_poke.atc * 0.2)
-
-        defense = self._compute_weighted_stat(p1_inf.defense, p2_inf.defense, 0.4, 0.4)
-        defense = int(defense * 0.8 + base_poke.defense * 0.2)
-
-        initiative = self._compute_weighted_stat(
-            p1_inf.initiative, p2_inf.initiative, 0.4, 0.4
+        hp_bonus = self._compute_stat_bonus(p1_inf.hp, p2_inf.hp, base_poke.hp)
+        atc_bonus = self._compute_stat_bonus(p1_inf.atc, p2_inf.atc, base_poke.atc)
+        defense_bonus = self._compute_stat_bonus(
+            p1_inf.defense, p2_inf.defense, base_poke.defense
         )
-        initiative = int(initiative * 0.8 + base_poke.initiative * 0.2)
+        initiative_bonus = self._compute_stat_bonus(
+            p1_inf.initiative, p2_inf.initiative, base_poke.initiative
+        )
 
-        # Get inherited moves
-        inherited_moves = self._get_egg_moves(offspring_id)
+        # Compute inherited moves
+        inherited_moves = self._compute_inherited_moves(offspring_id)
 
         return EggData(
             identifier=offspring_id,
-            hp=max(10, hp),  # Minimum HP of 10
-            atc=max(0, atc),
-            defense=max(0, defense),
-            initiative=max(0, initiative),
+            hp_bonus=hp_bonus,
+            atc_bonus=atc_bonus,
+            defense_bonus=defense_bonus,
+            initiative_bonus=initiative_bonus,
             hatch_time=self.compute_hatch_time(),
             parent1_identifier=self.parent1.identifier,
             parent2_identifier=self.parent2.identifier,
-            parent1_name=self.parent1.name,
-            parent2_name=self.parent2.name,
             inherited_moves=inherited_moves,
         )
 
@@ -372,9 +386,25 @@ class BreedingManager:
 
         if self.egg and elapsed >= self.egg.hatch_time:
             self.egg_ready = True
-            return True
+            if not self._notified:
+                self._notified = True
+                return True
 
         return False
+
+    def check_and_notify(self, current_time: int) -> bool:
+        """Check if egg is ready and return True if notification should be sent.
+
+        This is used by the periodic event to trigger notifications.
+        """
+        if not self.has_breeding_pair():
+            return False
+
+        was_ready = self.egg_ready
+        self.update(current_time)
+
+        # Return True only if egg just became ready
+        return self.egg_ready and not was_ready
 
     def is_egg_ready(self) -> bool:
         """Check if an egg is ready to be collected."""
@@ -398,43 +428,51 @@ class BreedingManager:
         remaining = self.egg.hatch_time - elapsed
         return max(0, remaining)
 
-    def collect_egg(self) -> Poke | None:
+    def collect_egg(self, current_time: int) -> Poke | None:
         """Collect the hatched egg as a new Poke. Resets breeding state."""
         if not self.egg_ready or self.egg is None:
             return None
 
+        # Determine shiny status
+        is_shiny = random.randint(0, 100) == 0  # 1% chance for shiny
+
+        # Get base attacks for the offspring
         pokes = asset_service.get_base_assets().pokes
         base_poke = pokes.get(self.egg.identifier)
+        base_attacks = list(base_poke.attacks[:4]) if base_poke else []
 
-        # Determine shiny status
-        is_shiny = random.randint(0, 100) == 0  # 1% chance
-
-        # Determine starting attacks - base attacks + inherited moves
-        starting_attacks = []
-        if base_poke:
-            attacks = asset_service.get_base_assets().attacks
-            # Get level 1 attacks from base poke
-            for atk in base_poke.attacks[:4]:
-                if attacks.get(atk) and attacks[atk].min_lvl <= 1:
-                    starting_attacks.append(atk)
-
-        # Add inherited moves (up to 4 total attacks)
+        # Add inherited moves (replace last attacks if needed)
+        final_attacks = base_attacks.copy()
         for move in self.egg.inherited_moves:
-            if len(starting_attacks) < 4 and move not in starting_attacks:
-                starting_attacks.append(move)
+            if len(final_attacks) < 4:
+                final_attacks.append(move)
+            else:
+                # Replace the last attack
+                final_attacks[-1] = move
 
         # Create a new Poke from the egg data
-        # Start at level 1 (xp=0)
         new_poke = Poke(
             self.egg.identifier,
             _xp=0,
             _hp="SKIP",
-            _attacks=starting_attacks if starting_attacks else None,
+            _attacks=final_attacks if final_attacks else None,
             player=True,
             shiny=is_shiny,
             nature=None,  # Random nature
             stats=None,
         )
+
+        # Apply stat bonuses from breeding
+        # These are added on top of the base stats calculated in Poke.__init__
+        new_poke.hp = max(1, new_poke.hp + self.egg.hp_bonus)
+        new_poke.full_hp = new_poke.hp
+        new_poke.atc = max(0, new_poke.atc + self.egg.atc_bonus)
+        new_poke.defense = max(0, new_poke.defense + self.egg.defense_bonus)
+        new_poke.initiative = max(0, new_poke.initiative + self.egg.initiative_bonus)
+
+        # Update HP bar to reflect new HP
+        new_poke.hp_bar.make(new_poke.hp)
+        new_poke.text_hp.rechar(f"HP:{new_poke.hp}")
 
         # Set breeding-related stats info
         new_poke.poke_stats = Stats(
@@ -443,21 +481,21 @@ class BreedingManager:
             caught_with="bred",
         )
 
-        # Add to history
+        # Add to breeding history
         history_entry = BreedingHistoryEntry(
             offspring_identifier=self.egg.identifier,
             offspring_name=new_poke.name,
             parent1_identifier=self.egg.parent1_identifier,
-            parent1_name=self.egg.parent1_name,
+            parent1_name=self.parent1.name if self.parent1 else "Unknown",
             parent2_identifier=self.egg.parent2_identifier,
-            parent2_name=self.egg.parent2_name,
-            hatch_time=self.egg.hatch_time,
-            bred_at=datetime.now(),
+            parent2_name=self.parent2.name if self.parent2 else "Unknown",
+            hatch_timestamp=current_time,
             inherited_moves=self.egg.inherited_moves,
-            was_shiny=is_shiny,
+            shiny=is_shiny,
         )
         self.history.append(history_entry)
-        # Keep only last MAX_HISTORY_ENTRIES
+
+        # Keep only the last MAX_HISTORY_ENTRIES
         if len(self.history) > MAX_HISTORY_ENTRIES:
             self.history = self.history[-MAX_HISTORY_ENTRIES:]
 
@@ -469,11 +507,16 @@ class BreedingManager:
         self.start_time = 0
         self.egg_ready = False
         self.egg = None
+        self._notified = False
 
         return new_poke
 
     def cancel_breeding(self) -> tuple[Poke | None, Poke | None, int | None, int | None]:
-        """Cancel breeding and return the parents with their original indices."""
+        """Cancel breeding and return the parents with their original indices.
+
+        Returns:
+            Tuple of (parent1, parent2, parent1_index, parent2_index)
+        """
         p1, p2 = self.parent1, self.parent2
         idx1, idx2 = self.parent1_index, self.parent2_index
         self.parent1 = None
@@ -483,6 +526,7 @@ class BreedingManager:
         self.start_time = 0
         self.egg_ready = False
         self.egg = None
+        self._notified = False
         return p1, p2, idx1, idx2
 
     def has_breeding_pair(self) -> bool:
@@ -504,7 +548,7 @@ class BreedingManager:
         return "Breeding in progress..."
 
     def get_history(self) -> list[BreedingHistoryEntry]:
-        """Get the breeding history (most recent last)."""
+        """Get the breeding history (last 5 entries)."""
         return self.history.copy()
 
     def dict(self) -> BreedingPairDict:
@@ -517,7 +561,7 @@ class BreedingManager:
             "start_time": self.start_time,
             "egg_ready": self.egg_ready,
             "egg": self.egg.dict() if self.egg else None,
-            "history": [h.dict() for h in self.history],
+            "history": [entry.dict() for entry in self.history],
         }
 
     def from_dict(self, data: BreedingPairDict) -> None:
@@ -534,9 +578,10 @@ class BreedingManager:
         self.egg_ready = data.get("egg_ready", False)
         self.egg = EggData.from_dict(data["egg"]) if data.get("egg") else None
         self.history = [
-            BreedingHistoryEntry.from_dict(h)
-            for h in data.get("history", [])
+            BreedingHistoryEntry.from_dict(entry)
+            for entry in data.get("history", [])
         ]
+        self._notified = self.egg_ready  # Don't re-notify on load
 
 
 # Global breeding manager instance

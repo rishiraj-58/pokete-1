@@ -74,33 +74,23 @@ class TreatNPCEvent(PeriodicEvent):
             NPC.get("npc_28").unset_used()
 
 
-class NotifierEvent(PeriodicEvent):
-    def tick(self, ctx: Context, tick: int):
-        notifier.next()
-
-
 class BreedingCheckEvent(PeriodicEvent):
-    """Periodic event to check breeding status and notify when egg is ready."""
-    max_tick = 50  # Check every 50 ticks
-
-    def __init__(self):
-        self._notified_ready = False
+    """Periodic event that checks breeding status and notifies when egg is ready."""
 
     def tick(self, ctx: Context, tick: int):
-        if tick % self.max_tick != 0:
+        # Check every 10 ticks to avoid excessive checking
+        if tick % 10 != 0:
             return
 
         # Check if egg just became ready
-        egg_just_ready = breeding_manager.update(timer.time.time)
-
-        if egg_just_ready and not self._notified_ready:
-            self._notified_ready = True
+        if breeding_manager.check_and_notify(timer.time.time):
             notifier.notify(
                 "Egg Ready!",
                 "Breeding",
-                "Your egg is ready to hatch! Visit the breeding facility to collect it."
+                "Your egg at the breeding facility is ready to be collected!"
             )
 
-        # Reset notification flag when breeding is no longer active
-        if not breeding_manager.has_breeding_pair():
-            self._notified_ready = False
+
+class NotifierEvent(PeriodicEvent):
+    def tick(self, ctx: Context, tick: int):
+        notifier.next()
