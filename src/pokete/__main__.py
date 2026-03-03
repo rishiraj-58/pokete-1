@@ -61,7 +61,7 @@ from pokete.classes.periodic_events import (
     TreatNPCEvent,
 )
 from pokete.classes.poke import Poke, Stats
-from pokete.classes.pokete_care import pokete_care
+from pokete.classes.pokete_care import pokete_care, breeding_manager
 from pokete.classes.pre_game import PreGameMap
 from pokete.classes.save import read_save, save
 from pokete.classes.settings import settings
@@ -484,6 +484,18 @@ def main():
                 {
                     "entry": 0,
                     "poke": None,
+                },
+            )
+        )
+        breeding_manager.from_dict(
+            session_info.get(
+                "breeding",
+                {
+                    "parent1": None,
+                    "parent2": None,
+                    "start_time": 0,
+                    "egg_ready": False,
+                    "egg": None,
                 },
             )
         )

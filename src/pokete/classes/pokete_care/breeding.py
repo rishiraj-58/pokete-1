@@ -1,7 +1,8 @@
 """Breeding system for the Pokete Care facility.
 
-Allows two compatible Poketes (sharing at least one type) to breed and produce
-an egg that hatches into a new Pokete after a certain time.
+Allows compatible poketes (sharing at least one type) to breed and produce
+eggs that hatch after a certain time. Stats of the offspring are computed
+as weighted averages of the parents' base stats.
 """
 
 import random
@@ -9,522 +10,347 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TypedDict
 
-from ..poke import Poke, Stats, PokeNature
 from ..asset_service.service import asset_service
+from ..poke import Poke
+from ..poke.nature import PokeNature
+from ..poke.stats import Stats
 
 
 class BreedingPairDict(TypedDict):
-    """Type definition for serialized breeding pair data."""
+    """Serialization format for a breeding pair."""
     parent1: dict | None
     parent2: dict | None
+    start_time: int
+    egg_ready: bool
+    egg: dict | None
 
 
 class EggDict(TypedDict):
-    """Type definition for serialized egg data."""
-    pokete_identifier: str
+    """Serialization format for an egg."""
+    identifier: str
     hp: int
     atc: int
     defense: int
     initiative: int
-    created_time: int
     hatch_time: int
     parent1_identifier: str
     parent2_identifier: str
-    shiny: bool
-
-
-class BreedingManagerDict(TypedDict):
-    """Type definition for serialized breeding manager data."""
-    breeding_pair: BreedingPairDict
-    egg: EggDict | None
-    notifications: list[str]
-
-
-# Base hatching time in in-game minutes (approximately 2 in-game hours)
-BASE_HATCH_TIME = 120
-
-# Weight factors for stat inheritance
-PARENT_WEIGHT_MIN = 0.3
-PARENT_WEIGHT_MAX = 0.7
 
 
 @dataclass
-class EggStats:
-    """Holds the computed stats for an egg before it hatches."""
+class EggData:
+    """Holds computed egg data before it becomes a full Poke."""
+    identifier: str
     hp: int
     atc: int
     defense: int
     initiative: int
+    hatch_time: int
+    parent1_identifier: str
+    parent2_identifier: str
 
-
-class Egg:
-    """Represents a Pokete egg that will hatch after a certain time.
-    
-    Args:
-        pokete_identifier: The identifier of the Pokete that will hatch
-        stats: The computed stats for the egg
-        created_time: The in-game time when the egg was created
-        hatch_time: The in-game time when the egg will be ready to hatch
-        parent1_identifier: The identifier of the first parent
-        parent2_identifier: The identifier of the second parent
-        shiny: Whether the hatched Pokete will be shiny
-    """
-    
-    def __init__(
-        self,
-        pokete_identifier: str,
-        stats: EggStats,
-        created_time: int,
-        hatch_time: int,
-        parent1_identifier: str,
-        parent2_identifier: str,
-        shiny: bool = False
-    ):
-        self.pokete_identifier = pokete_identifier
-        self.stats = stats
-        self.created_time = created_time
-        self.hatch_time = hatch_time
-        self.parent1_identifier = parent1_identifier
-        self.parent2_identifier = parent2_identifier
-        self.shiny = shiny
-    
-    def is_ready(self, current_time: int) -> bool:
-        """Check if the egg is ready to hatch."""
-        return current_time >= self.hatch_time
-    
-    def time_remaining(self, current_time: int) -> int:
-        """Return the time remaining until hatch in in-game minutes."""
-        return max(0, self.hatch_time - current_time)
-    
-    def hatch(self) -> Poke:
-        """Create the Pokete from this egg.
-        
-        Returns:
-            A new Poke instance with inherited stats.
-        """
-        poke = Poke(
-            self.pokete_identifier,
-            _xp=0,
-            _hp="SKIP",
-            shiny=self.shiny
-        )
-        poke.poke_stats = Stats(
-            poke.name,
-            datetime.now(),
-            caught_with="egg"
-        )
-        return poke
-    
     def dict(self) -> EggDict:
-        """Serialize egg to a dictionary."""
         return {
-            "pokete_identifier": self.pokete_identifier,
-            "hp": self.stats.hp,
-            "atc": self.stats.atc,
-            "defense": self.stats.defense,
-            "initiative": self.stats.initiative,
-            "created_time": self.created_time,
+            "identifier": self.identifier,
+            "hp": self.hp,
+            "atc": self.atc,
+            "defense": self.defense,
+            "initiative": self.initiative,
             "hatch_time": self.hatch_time,
             "parent1_identifier": self.parent1_identifier,
             "parent2_identifier": self.parent2_identifier,
-            "shiny": self.shiny
         }
-    
+
     @classmethod
-    def from_dict(cls, data: EggDict) -> "Egg":
-        """Deserialize egg from a dictionary."""
-        stats = EggStats(
+    def from_dict(cls, data: EggDict) -> "EggData":
+        return cls(
+            identifier=data["identifier"],
             hp=data["hp"],
             atc=data["atc"],
             defense=data["defense"],
-            initiative=data["initiative"]
-        )
-        return cls(
-            pokete_identifier=data["pokete_identifier"],
-            stats=stats,
-            created_time=data["created_time"],
+            initiative=data["initiative"],
             hatch_time=data["hatch_time"],
             parent1_identifier=data["parent1_identifier"],
             parent2_identifier=data["parent2_identifier"],
-            shiny=data.get("shiny", False)
         )
 
 
-class BreedingPair:
-    """Represents a pair of Poketes that can potentially breed.
-    
-    Args:
-        parent1: The first parent Pokete (or None)
-        parent2: The second parent Pokete (or None)
-    """
-    
-    def __init__(self, parent1: Poke | None = None, parent2: Poke | None = None):
-        self.parent1 = parent1
-        self.parent2 = parent2
-    
-    def is_complete(self) -> bool:
-        """Check if both parents are present."""
-        return self.parent1 is not None and self.parent2 is not None
-    
-    def is_empty(self) -> bool:
-        """Check if no parents are present."""
-        return self.parent1 is None and self.parent2 is None
-    
-    def has_slot_available(self) -> bool:
-        """Check if there's a slot available for a parent."""
-        return self.parent1 is None or self.parent2 is None
-    
-    def add_parent(self, poke: Poke) -> bool:
-        """Add a parent to the breeding pair.
-        
-        Returns:
-            True if the parent was added successfully, False otherwise.
-        """
-        if self.parent1 is None:
-            self.parent1 = poke
-            return True
-        elif self.parent2 is None:
-            self.parent2 = poke
-            return True
-        return False
-    
-    def remove_parent(self, index: int) -> Poke | None:
-        """Remove and return a parent from the breeding pair.
-        
-        Args:
-            index: 0 for parent1, 1 for parent2
-            
-        Returns:
-            The removed Poke, or None if the slot was empty.
-        """
-        if index == 0:
-            poke = self.parent1
-            self.parent1 = None
-            return poke
-        elif index == 1:
-            poke = self.parent2
-            self.parent2 = None
-            return poke
-        return None
-    
-    def get_shared_types(self) -> list[str]:
-        """Get the types shared between both parents.
-        
-        Returns:
-            A list of shared type names.
-        """
-        if not self.is_complete():
-            return []
-        
-        types1 = set(self.parent1.inf.types)
-        types2 = set(self.parent2.inf.types)
-        return list(types1 & types2)
-    
-    def is_compatible(self) -> bool:
-        """Check if the pair is compatible for breeding.
-        
-        Two Poketes are compatible if they share at least one type.
-        """
-        return len(self.get_shared_types()) > 0
-    
-    def clear(self):
-        """Clear both parents from the pair."""
-        self.parent1 = None
-        self.parent2 = None
-    
-    def dict(self) -> BreedingPairDict:
-        """Serialize the breeding pair to a dictionary."""
-        return {
-            "parent1": None if self.parent1 is None else self.parent1.dict(),
-            "parent2": None if self.parent2 is None else self.parent2.dict()
-        }
-    
-    @classmethod
-    def from_dict(cls, data: BreedingPairDict) -> "BreedingPair":
-        """Deserialize a breeding pair from a dictionary."""
-        parent1 = None if data.get("parent1") is None else Poke.from_dict(data["parent1"])
-        parent2 = None if data.get("parent2") is None else Poke.from_dict(data["parent2"])
-        return cls(parent1, parent2)
+# Base hatching time in game ticks (can be adjusted for balance)
+BASE_HATCH_TIME = 300
 
 
 class BreedingManager:
-    """Manages the breeding system for the Pokete Care facility.
-    
-    Tracks breeding pairs, computes hatching times, generates eggs,
-    and handles notifications when eggs are ready.
+    """Manages breeding pairs and egg generation in the Pokete Care facility.
+
+    Two compatible poketes (sharing at least one type) can breed to produce
+    an egg. The egg's base stats are computed as weighted averages of the
+    parents' base stats.
     """
-    
+
     def __init__(self):
-        self.breeding_pair = BreedingPair()
-        self.egg: Egg | None = None
-        self.notifications: list[str] = []
-    
-    def add_to_breeding_pair(self, poke: Poke) -> bool:
-        """Add a Pokete to the breeding pair.
-        
-        Args:
-            poke: The Pokete to add
-            
-        Returns:
-            True if successfully added, False otherwise.
+        self.parent1: Poke | None = None
+        self.parent2: Poke | None = None
+        self.start_time: int = 0
+        self.egg_ready: bool = False
+        self.egg: EggData | None = None
+
+    def can_breed(self, poke1: Poke, poke2: Poke) -> bool:
+        """Check if two poketes are compatible for breeding.
+
+        Poketes are compatible if they share at least one type.
         """
-        if self.egg is not None:
+        if poke1 is None or poke2 is None:
             return False
-        return self.breeding_pair.add_parent(poke)
-    
-    def remove_from_breeding_pair(self, index: int) -> Poke | None:
-        """Remove a Pokete from the breeding pair.
-        
-        Args:
-            index: 0 for first parent, 1 for second parent
-            
-        Returns:
-            The removed Poke, or None if the slot was empty.
-        """
-        return self.breeding_pair.remove_parent(index)
-    
-    def can_breed(self) -> bool:
-        """Check if breeding can start.
-        
-        Returns:
-            True if breeding pair is complete, compatible, and no egg exists.
-        """
-        return (
-            self.breeding_pair.is_complete() and
-            self.breeding_pair.is_compatible() and
-            self.egg is None
-        )
-    
-    def get_incompatibility_reason(self) -> str | None:
-        """Get the reason why breeding cannot start.
-        
-        Returns:
-            A string describing the reason, or None if breeding can start.
-        """
-        if self.egg is not None:
-            return "An egg is already incubating"
-        if not self.breeding_pair.is_complete():
-            return "Two Poketes are required for breeding"
-        if not self.breeding_pair.is_compatible():
-            return "These Poketes don't share any types and cannot breed"
-        return None
-    
-    def start_breeding(self, current_time: int) -> Egg | None:
-        """Start the breeding process and generate an egg.
-        
-        Args:
-            current_time: The current in-game time
-            
-        Returns:
-            The generated Egg, or None if breeding cannot start.
-        """
-        if not self.can_breed():
-            return None
-        
-        parent1 = self.breeding_pair.parent1
-        parent2 = self.breeding_pair.parent2
-        
-        # Determine which Pokete the offspring will be
-        offspring_identifier = self._select_offspring_identifier(parent1, parent2)
-        
-        # Compute stats using weighted average
-        stats = self._compute_offspring_stats(parent1, parent2, offspring_identifier)
-        
-        # Compute hatch time based on parents' levels
-        hatch_time = self._compute_hatch_time(parent1, parent2, current_time)
-        
-        # Determine if shiny (very rare - 1 in 500 chance, slightly better if either parent is shiny)
-        shiny_chance = 500
-        if parent1.shiny or parent2.shiny:
-            shiny_chance = 250
-        shiny = random.randint(1, shiny_chance) == 1
-        
-        self.egg = Egg(
-            pokete_identifier=offspring_identifier,
-            stats=stats,
-            created_time=current_time,
-            hatch_time=hatch_time,
-            parent1_identifier=parent1.identifier,
-            parent2_identifier=parent2.identifier,
-            shiny=shiny
-        )
-        
-        return self.egg
-    
-    def _select_offspring_identifier(self, parent1: Poke, parent2: Poke) -> str:
-        """Select which Pokete the offspring will be.
-        
-        The offspring is one of the parents' base forms (or the parent itself
-        if it doesn't evolve from anything), selected randomly.
-        """
-        pokes = asset_service.get_base_assets().pokes
-        
-        candidates = []
-        for parent in [parent1, parent2]:
-            # Find the base form by checking if any pokete evolves into this one
-            base_form = parent.identifier
-            for poke_id, poke_data in pokes.items():
-                if poke_data.evolve_poke == parent.identifier:
-                    base_form = poke_id
-                    break
-            candidates.append(base_form)
-        
-        return random.choice(candidates)
-    
-    def _compute_offspring_stats(
-        self,
-        parent1: Poke,
-        parent2: Poke,
-        offspring_identifier: str
-    ) -> EggStats:
-        """Compute the offspring's stats using weighted average of parents.
-        
-        The weight is randomly determined within a range for each stat,
-        making each offspring unique.
-        """
-        pokes = asset_service.get_base_assets().pokes
-        base_stats = pokes[offspring_identifier]
-        
-        def weighted_avg(stat1: int, stat2: int, base: int) -> int:
-            weight = random.uniform(PARENT_WEIGHT_MIN, PARENT_WEIGHT_MAX)
-            # Combine parent stats with base stats
-            parent_avg = stat1 * weight + stat2 * (1 - weight)
-            # The final stat is influenced by both parents and the base species
-            return int((parent_avg + base) / 2)
-        
-        return EggStats(
-            hp=weighted_avg(parent1.inf.hp, parent2.inf.hp, base_stats.hp),
-            atc=weighted_avg(parent1.inf.atc, parent2.inf.atc, base_stats.atc),
-            defense=weighted_avg(parent1.inf.defense, parent2.inf.defense, base_stats.defense),
-            initiative=weighted_avg(parent1.inf.initiative, parent2.inf.initiative, base_stats.initiative)
-        )
-    
-    def _compute_hatch_time(
-        self,
-        parent1: Poke,
-        parent2: Poke,
-        current_time: int
-    ) -> int:
-        """Compute when the egg will be ready to hatch.
-        
-        Higher level parents produce eggs that hatch faster.
-        """
-        avg_level = (parent1.lvl() + parent2.lvl()) / 2
-        # Reduce hatch time by 1 minute per level (minimum 30 minutes)
-        hatch_duration = max(30, BASE_HATCH_TIME - int(avg_level))
-        return current_time + hatch_duration
-    
-    def check_egg_ready(self, current_time: int) -> bool:
-        """Check if the egg is ready and add notification if so.
-        
-        Args:
-            current_time: The current in-game time
-            
-        Returns:
-            True if the egg is ready, False otherwise.
-        """
-        if self.egg is None:
+
+        if poke1.identifier == "__fallback__" or poke2.identifier == "__fallback__":
             return False
-        
-        if self.egg.is_ready(current_time):
-            notification = f"Your egg is ready to hatch! It's a {self.egg.pokete_identifier}!"
-            if notification not in self.notifications:
-                self.notifications.append(notification)
-            return True
-        return False
-    
-    def get_egg_status(self, current_time: int) -> str | None:
-        """Get a human-readable status of the current egg.
-        
-        Args:
-            current_time: The current in-game time
-            
-        Returns:
-            A status string, or None if no egg exists.
+
+        types1 = set(t.name for t in poke1.types)
+        types2 = set(t.name for t in poke2.types)
+        return bool(types1 & types2)
+
+    def get_shared_types(self, poke1: Poke, poke2: Poke) -> list[str]:
+        """Get the types shared between two poketes."""
+        if poke1 is None or poke2 is None:
+            return []
+        types1 = set(t.name for t in poke1.types)
+        types2 = set(t.name for t in poke2.types)
+        return list(types1 & types2)
+
+    def start_breeding(self, poke1: Poke, poke2: Poke, current_time: int) -> bool:
+        """Start breeding two poketes if they are compatible.
+
+        Returns True if breeding started successfully, False otherwise.
         """
-        if self.egg is None:
-            return None
-        
-        if self.egg.is_ready(current_time):
-            return "Your egg is ready to collect!"
-        
-        remaining = self.egg.time_remaining(current_time)
-        hours = remaining // 60
-        minutes = remaining % 60
-        
-        if hours > 0:
-            return f"Time until hatch: {hours}h {minutes}m"
-        return f"Time until hatch: {minutes}m"
-    
-    def collect_egg(self) -> Poke | None:
-        """Collect the hatched Pokete from the egg.
-        
-        Returns:
-            The hatched Poke, or None if no egg or not ready.
-        """
-        if self.egg is None:
-            return None
-        
-        poke = self.egg.hatch()
+        if not self.can_breed(poke1, poke2):
+            return False
+
+        if self.parent1 is not None or self.parent2 is not None:
+            return False
+
+        self.parent1 = poke1
+        self.parent2 = poke2
+        self.start_time = current_time
+        self.egg_ready = False
         self.egg = None
-        # Clear the notification about this egg
-        self.notifications = [n for n in self.notifications if "egg is ready" not in n.lower()]
-        return poke
-    
-    def has_notification(self) -> bool:
-        """Check if there are any pending notifications."""
-        return len(self.notifications) > 0
-    
-    def get_notifications(self) -> list[str]:
-        """Get and clear all pending notifications."""
-        notifications = self.notifications.copy()
-        self.notifications.clear()
-        return notifications
-    
-    def get_breeding_pair_status(self) -> str:
-        """Get a human-readable status of the breeding pair."""
-        if self.breeding_pair.is_empty():
-            return "No Poketes in breeding pair"
-        
-        parent1_name = self.breeding_pair.parent1.name if self.breeding_pair.parent1 else "Empty"
-        parent2_name = self.breeding_pair.parent2.name if self.breeding_pair.parent2 else "Empty"
-        
-        status = f"Parent 1: {parent1_name}, Parent 2: {parent2_name}"
-        
-        if self.breeding_pair.is_complete():
-            if self.breeding_pair.is_compatible():
-                shared = self.breeding_pair.get_shared_types()
-                status += f" (Compatible - shared types: {', '.join(shared)})"
+        return True
+
+    def _compute_weighted_stat(
+        self, stat1: int, stat2: int, weight1: float = 0.5, weight2: float = 0.5
+    ) -> int:
+        """Compute weighted average of two stats with some random variation."""
+        base = stat1 * weight1 + stat2 * weight2
+        variation = random.uniform(-0.1, 0.1) * base
+        return max(1, int(base + variation))
+
+    def _select_offspring_identifier(self) -> str:
+        """Select which pokete the offspring will be based on."""
+        if self.parent1 is None or self.parent2 is None:
+            raise ValueError("Both parents must be set")
+
+        pokes = asset_service.get_base_assets().pokes
+        candidates = []
+
+        shared_types = self.get_shared_types(self.parent1, self.parent2)
+
+        # Prefer parents that haven't evolved (base forms)
+        for parent in [self.parent1, self.parent2]:
+            # Check if this parent is a base form (not evolved from something)
+            # A simple heuristic: add both parents as candidates
+            candidates.append(parent.identifier)
+
+        # Also consider poketes that share the common types
+        for poke_id, poke_data in pokes.items():
+            if poke_id == "__fallback__":
+                continue
+            poke_types = set(poke_data.types)
+            if any(t in poke_types for t in shared_types):
+                # Prefer base-level poketes (those with evolve_poke set)
+                if poke_data.evolve_poke and poke_data.evolve_lvl > 0:
+                    candidates.append(poke_id)
+
+        # Weight towards parents
+        weights = []
+        for c in candidates:
+            if c == self.parent1.identifier or c == self.parent2.identifier:
+                weights.append(3)  # Higher chance for parent types
             else:
-                status += " (Incompatible - no shared types)"
-        
-        return status
-    
-    def return_parents(self) -> tuple[Poke | None, Poke | None]:
-        """Return both parents and clear the breeding pair.
-        
-        Returns:
-            A tuple of (parent1, parent2), either can be None.
-        """
-        parent1 = self.breeding_pair.parent1
-        parent2 = self.breeding_pair.parent2
-        self.breeding_pair.clear()
-        return parent1, parent2
-    
-    def dict(self) -> BreedingManagerDict:
-        """Serialize the breeding manager to a dictionary."""
+                weights.append(1)
+
+        return random.choices(candidates, weights=weights, k=1)[0]
+
+    def compute_hatch_time(self) -> int:
+        """Compute how long the egg needs to hatch based on parents."""
+        if self.parent1 is None or self.parent2 is None:
+            return BASE_HATCH_TIME
+
+        # Base time modified by average level of parents
+        avg_level = (self.parent1.lvl() + self.parent2.lvl()) / 2
+        # Higher level parents = slightly faster hatching
+        level_modifier = max(0.5, 1.0 - (avg_level / 100))
+        return int(BASE_HATCH_TIME * level_modifier)
+
+    def generate_egg(self) -> EggData | None:
+        """Generate egg data based on the breeding pair."""
+        if self.parent1 is None or self.parent2 is None:
+            return None
+
+        pokes = asset_service.get_base_assets().pokes
+        offspring_id = self._select_offspring_identifier()
+        base_poke = pokes[offspring_id]
+
+        # Compute stats as weighted average of parents' base stats + offspring base
+        p1_inf = self.parent1.inf
+        p2_inf = self.parent2.inf
+
+        # Weight: 40% parent1, 40% parent2, 20% base offspring stats
+        hp = self._compute_weighted_stat(p1_inf.hp, p2_inf.hp, 0.4, 0.4)
+        hp = int(hp * 0.8 + base_poke.hp * 0.2)
+
+        atc = self._compute_weighted_stat(p1_inf.atc, p2_inf.atc, 0.4, 0.4)
+        atc = int(atc * 0.8 + base_poke.atc * 0.2)
+
+        defense = self._compute_weighted_stat(p1_inf.defense, p2_inf.defense, 0.4, 0.4)
+        defense = int(defense * 0.8 + base_poke.defense * 0.2)
+
+        initiative = self._compute_weighted_stat(
+            p1_inf.initiative, p2_inf.initiative, 0.4, 0.4
+        )
+        initiative = int(initiative * 0.8 + base_poke.initiative * 0.2)
+
+        return EggData(
+            identifier=offspring_id,
+            hp=max(10, hp),  # Minimum HP of 10
+            atc=max(0, atc),
+            defense=max(0, defense),
+            initiative=max(0, initiative),
+            hatch_time=self.compute_hatch_time(),
+            parent1_identifier=self.parent1.identifier,
+            parent2_identifier=self.parent2.identifier,
+        )
+
+    def update(self, current_time: int) -> bool:
+        """Update breeding state. Returns True if egg just became ready."""
+        if self.parent1 is None or self.parent2 is None:
+            return False
+
+        if self.egg_ready:
+            return False
+
+        elapsed = current_time - self.start_time
+        if self.egg is None:
+            self.egg = self.generate_egg()
+
+        if self.egg and elapsed >= self.egg.hatch_time:
+            self.egg_ready = True
+            return True
+
+        return False
+
+    def is_egg_ready(self) -> bool:
+        """Check if an egg is ready to be collected."""
+        return self.egg_ready and self.egg is not None
+
+    def get_time_remaining(self, current_time: int) -> int:
+        """Get remaining time until egg hatches. Returns 0 if ready or no breeding."""
+        if self.parent1 is None or self.parent2 is None:
+            return 0
+
+        if self.egg_ready:
+            return 0
+
+        if self.egg is None:
+            self.egg = self.generate_egg()
+
+        if self.egg is None:
+            return 0
+
+        elapsed = current_time - self.start_time
+        remaining = self.egg.hatch_time - elapsed
+        return max(0, remaining)
+
+    def collect_egg(self) -> Poke | None:
+        """Collect the hatched egg as a new Poke. Resets breeding state."""
+        if not self.egg_ready or self.egg is None:
+            return None
+
+        # Create a new Poke from the egg data
+        # Start at level 1 (xp=0)
+        new_poke = Poke(
+            self.egg.identifier,
+            _xp=0,
+            _hp="SKIP",
+            player=True,
+            shiny=random.randint(0, 100) == 0,  # 1% chance for shiny
+            nature=None,  # Random nature
+            stats=None,
+        )
+
+        # Set breeding-related stats info
+        new_poke.poke_stats = Stats(
+            new_poke.name,
+            datetime.now(),
+            caught_with="bred",
+        )
+
+        # Reset breeding state
+        self.parent1 = None
+        self.parent2 = None
+        self.start_time = 0
+        self.egg_ready = False
+        self.egg = None
+
+        return new_poke
+
+    def cancel_breeding(self) -> tuple[Poke | None, Poke | None]:
+        """Cancel breeding and return the parents."""
+        p1, p2 = self.parent1, self.parent2
+        self.parent1 = None
+        self.parent2 = None
+        self.start_time = 0
+        self.egg_ready = False
+        self.egg = None
+        return p1, p2
+
+    def has_breeding_pair(self) -> bool:
+        """Check if there's an active breeding pair."""
+        return self.parent1 is not None and self.parent2 is not None
+
+    def get_breeding_status(self, current_time: int) -> str:
+        """Get a human-readable breeding status message."""
+        if not self.has_breeding_pair():
+            return "No poketes are currently breeding."
+
+        if self.egg_ready:
+            return "An egg is ready to be collected!"
+
+        remaining = self.get_time_remaining(current_time)
+        if remaining > 0:
+            return f"Breeding in progress... {remaining} time units remaining."
+
+        return "Breeding in progress..."
+
+    def dict(self) -> BreedingPairDict:
+        """Serialize the breeding manager state to a dict."""
         return {
-            "breeding_pair": self.breeding_pair.dict(),
-            "egg": None if self.egg is None else self.egg.dict(),
-            "notifications": self.notifications.copy()
+            "parent1": self.parent1.dict() if self.parent1 else None,
+            "parent2": self.parent2.dict() if self.parent2 else None,
+            "start_time": self.start_time,
+            "egg_ready": self.egg_ready,
+            "egg": self.egg.dict() if self.egg else None,
         }
-    
-    def from_dict(self, data: BreedingManagerDict):
-        """Load state from a dictionary."""
-        self.breeding_pair = BreedingPair.from_dict(data.get("breeding_pair", {"parent1": None, "parent2": None}))
-        egg_data = data.get("egg")
-        self.egg = None if egg_data is None else Egg.from_dict(egg_data)
-        self.notifications = data.get("notifications", [])
+
+    def from_dict(self, data: BreedingPairDict) -> None:
+        """Load breeding manager state from a dict."""
+        self.parent1 = (
+            Poke.from_dict(data["parent1"]) if data.get("parent1") else None
+        )
+        self.parent2 = (
+            Poke.from_dict(data["parent2"]) if data.get("parent2") else None
+        )
+        self.start_time = data.get("start_time", 0)
+        self.egg_ready = data.get("egg_ready", False)
+        self.egg = EggData.from_dict(data["egg"]) if data.get("egg") else None
 
 
 # Global breeding manager instance
