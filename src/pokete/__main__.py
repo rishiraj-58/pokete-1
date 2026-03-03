@@ -55,6 +55,7 @@ from pokete.classes.multiplayer.interactions.context_menu import ContextMenu
 from pokete.classes.multiplayer.modeprovider import Mode, modeProvider
 from pokete.classes.multiplayer.pc_manager import pc_manager
 from pokete.classes.periodic_events import (
+    BreedingCheckEvent,
     MovingGrassEvent,
     MovingWaterEvent,
     NotifierEvent,
@@ -343,6 +344,7 @@ def _game(_map: PlayMap, figure: Figure):
             MovingGrassEvent(_map),
             MovingWaterEvent(_map),
             *([TreatNPCEvent()] if modeProvider.mode == Mode.SINGLE else []),
+            *([BreedingCheckEvent()] if modeProvider.mode == Mode.SINGLE else []),
             NotifierEvent(),
             single_event_periodic_event,
         ]
@@ -493,9 +495,12 @@ def main():
                 {
                     "parent1": None,
                     "parent2": None,
+                    "parent1_index": None,
+                    "parent2_index": None,
                     "start_time": 0,
                     "egg_ready": False,
                     "egg": None,
+                    "history": [],
                 },
             )
         )

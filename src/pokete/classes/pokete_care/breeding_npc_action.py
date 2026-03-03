@@ -3,6 +3,7 @@
 from ..npcs import NPCAction
 from ..npcs.npc_action import NPCInterface, UIInterface
 from .. import timer
+from ..poke import Poke
 from .breeding import breeding_manager
 
 
@@ -40,10 +41,21 @@ class BreedingNPCAction(NPCAction):
             if new_poke:
                 npc.ctx.figure.add_poke(new_poke)
                 npc.ctx.figure.caught_pokes.append(new_poke.identifier)
-                npc.text([
-                    f"Congratulations! You received a {new_poke.name}!",
-                    "Take good care of it!"
-                ])
+
+                # Show inherited moves if any
+                egg = self.manager.history[-1] if self.manager.history else None
+                if egg and egg.inherited_moves:
+                    moves_str = ", ".join(egg.inherited_moves)
+                    npc.text([
+                        f"Congratulations! You received a {new_poke.name}!",
+                        f"It inherited these moves: {moves_str}",
+                        "Take good care of it!"
+                    ])
+                else:
+                    npc.text([
+                        f"Congratulations! You received a {new_poke.name}!",
+                        "Take good care of it!"
+                    ])
             else:
                 npc.text(["Something went wrong with the egg..."])
         else:
@@ -61,10 +73,15 @@ class BreedingNPCAction(NPCAction):
         ])
 
         if ui.ask_bool("Would you like to cancel the breeding?"):
-            p1, p2 = self.manager.cancel_breeding()
-            if p1:
+            p1, p2, idx1, idx2 = self.manager.cancel_breeding()
+            # Return poketes to their original positions
+            if p1 and idx1 is not None:
+                npc.ctx.figure.add_poke(p1, idx1)
+            elif p1:
                 npc.ctx.figure.add_poke(p1)
-            if p2:
+            if p2 and idx2 is not None:
+                npc.ctx.figure.add_poke(p2, idx2)
+            elif p2:
                 npc.ctx.figure.add_poke(p2)
             npc.text(["Breeding cancelled. Your poketes have been returned."])
 
@@ -76,9 +93,14 @@ class BreedingNPCAction(NPCAction):
             "Poketes are compatible if they share at least one type."
         ])
 
-        if not ui.ask_bool("Would you like to start breeding?"):
-            return
+        # Show menu options
+        if ui.ask_bool("Would you like to start breeding?"):
+            self._start_breeding_flow(npc, ui)
+        elif ui.ask_bool("Would you like to view breeding history?"):
+            self._show_breeding_history(npc)
 
+    def _start_breeding_flow(self, npc: NPCInterface, ui: UIInterface):
+        """Handle the flow for starting a new breeding pair."""
         pokes = npc.ctx.figure.pokes
         valid_pokes = [
             p for p in pokes
@@ -116,7 +138,6 @@ class BreedingNPCAction(NPCAction):
             return
 
         if not self.manager.can_breed(poke1, poke2):
-            shared = self.manager.get_shared_types(poke1, poke2)
             npc.text([
                 f"{poke1.name} and {poke2.name} are not compatible!",
                 "They need to share at least one type to breed.",
@@ -125,17 +146,14 @@ class BreedingNPCAction(NPCAction):
             ])
             return
 
-        from ..poke import Poke
-        # Remove poketes from player's team
+        # Replace poketes with fallback placeholders (same pattern as PoketeCareNPCAction)
         npc.ctx.figure.add_poke(Poke("__fallback__", 0), index1)
-        # Adjust index2 if needed
-        if index2 > index1:
-            # The indices are stable since we're replacing, not removing
-            pass
         npc.ctx.figure.add_poke(Poke("__fallback__", 0), index2)
 
-        # Start breeding
-        if self.manager.start_breeding(poke1, poke2, timer.time.time):
+        # Start breeding with indices stored for later restoration
+        if self.manager.start_breeding(
+            poke1, poke2, timer.time.time, index1, index2
+        ):
             hatch_time = self.manager.compute_hatch_time()
             shared_types = self.manager.get_shared_types(poke1, poke2)
             npc.text([
@@ -148,3 +166,22 @@ class BreedingNPCAction(NPCAction):
             npc.ctx.figure.add_poke(poke1, index1)
             npc.ctx.figure.add_poke(poke2, index2)
             npc.text(["Something went wrong. Breeding could not start."])
+
+    def _show_breeding_history(self, npc: NPCInterface):
+        """Show the breeding history to the player."""
+        history = self.manager.get_history()
+
+        if not history:
+            npc.text(["No breeding history yet. Start breeding to see records here!"])
+            return
+
+        npc.text([f"Your last {len(history)} bred poketes:"])
+
+        for i, entry in enumerate(reversed(history), 1):
+            shiny_str = " (SHINY!)" if entry.was_shiny else ""
+            moves_str = f", Moves: {', '.join(entry.inherited_moves)}" if entry.inherited_moves else ""
+            npc.text([
+                f"{i}. {entry.offspring_name}{shiny_str}",
+                f"   Parents: {entry.parent1_name} x {entry.parent2_name}",
+                f"   Bred: {entry.bred_at.strftime('%Y-%m-%d %H:%M')}{moves_str}"
+            ])
