@@ -8,6 +8,7 @@ from pokete.base.ui.notify import notifier
 from . import timer
 from .landscape import HighGrass, Meadow
 from .npcs import NPC
+from .pokete_care import breeding_manager
 from .settings import settings
 
 
@@ -71,6 +72,23 @@ class TreatNPCEvent(PeriodicEvent):
     def tick(self, ctx: Context, tick: int):
         if timer.time.normalized == 6 * 60:
             NPC.get("npc_28").unset_used()
+
+
+class BreedingCheckEvent(PeriodicEvent):
+    """Periodic event that checks breeding status and notifies when egg is ready."""
+
+    def tick(self, ctx: Context, tick: int):
+        # Check every 10 ticks to avoid excessive checking
+        if tick % 10 != 0:
+            return
+
+        # Check if egg just became ready
+        if breeding_manager.check_and_notify(timer.time.time):
+            notifier.notify(
+                "Egg Ready!",
+                "Breeding",
+                "Your egg at the breeding facility is ready to be collected!"
+            )
 
 
 class NotifierEvent(PeriodicEvent):

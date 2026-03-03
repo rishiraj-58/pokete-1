@@ -74,6 +74,8 @@ class BreedingPairDict(TypedDict):
     """Serialization format for a breeding pair."""
     parent1: dict | None
     parent2: dict | None
+    parent1_index: int | None
+    parent2_index: int | None
     start_time: int
     egg_ready: bool
     egg: dict | None
@@ -83,10 +85,10 @@ class BreedingPairDict(TypedDict):
 class EggDict(TypedDict):
     """Serialization format for an egg."""
     identifier: str
-    hp: int
-    atc: int
-    defense: int
-    initiative: int
+    hp_bonus: int
+    atc_bonus: int
+    defense_bonus: int
+    initiative_bonus: int
     hatch_time: int
     parent1_identifier: str
     parent2_identifier: str
@@ -95,12 +97,15 @@ class EggDict(TypedDict):
 
 @dataclass
 class EggData:
-    """Holds computed egg data before it becomes a full Poke."""
+    """Holds computed egg data before it becomes a full Poke.
+    
+    The bonus stats are added to the hatched Poke's base stats after construction.
+    """
     identifier: str
-    hp: int
-    atc: int
-    defense: int
-    initiative: int
+    hp_bonus: int
+    atc_bonus: int
+    defense_bonus: int
+    initiative_bonus: int
     hatch_time: int
     parent1_identifier: str
     parent2_identifier: str
@@ -109,10 +114,10 @@ class EggData:
     def dict(self) -> EggDict:
         return {
             "identifier": self.identifier,
-            "hp": self.hp,
-            "atc": self.atc,
-            "defense": self.defense,
-            "initiative": self.initiative,
+            "hp_bonus": self.hp_bonus,
+            "atc_bonus": self.atc_bonus,
+            "defense_bonus": self.defense_bonus,
+            "initiative_bonus": self.initiative_bonus,
             "hatch_time": self.hatch_time,
             "parent1_identifier": self.parent1_identifier,
             "parent2_identifier": self.parent2_identifier,
@@ -123,10 +128,10 @@ class EggData:
     def from_dict(cls, data: EggDict) -> "EggData":
         return cls(
             identifier=data["identifier"],
-            hp=data["hp"],
-            atc=data["atc"],
-            defense=data["defense"],
-            initiative=data["initiative"],
+            hp_bonus=data.get("hp_bonus", 0),
+            atc_bonus=data.get("atc_bonus", 0),
+            defense_bonus=data.get("defense_bonus", 0),
+            initiative_bonus=data.get("initiative_bonus", 0),
             hatch_time=data["hatch_time"],
             parent1_identifier=data["parent1_identifier"],
             parent2_identifier=data["parent2_identifier"],
@@ -138,6 +143,8 @@ class EggData:
 BASE_HATCH_TIME = 300
 # Maximum breeding history entries to keep
 MAX_HISTORY_ENTRIES = 5
+# Multi-type bonus: 10% reduction when sharing 2+ types
+MULTI_TYPE_BONUS = 0.10
 
 
 class BreedingManager:
@@ -151,6 +158,8 @@ class BreedingManager:
     def __init__(self):
         self.parent1: Poke | None = None
         self.parent2: Poke | None = None
+        self.parent1_index: int | None = None
+        self.parent2_index: int | None = None
         self.start_time: int = 0
         self.egg_ready: bool = False
         self.egg: EggData | None = None
@@ -180,8 +189,17 @@ class BreedingManager:
         types2 = set(t.name for t in poke2.types)
         return list(types1 & types2)
 
-    def start_breeding(self, poke1: Poke, poke2: Poke, current_time: int) -> bool:
+    def start_breeding(
+        self, poke1: Poke, poke2: Poke, index1: int, index2: int, current_time: int
+    ) -> bool:
         """Start breeding two poketes if they are compatible.
+
+        Args:
+            poke1: First parent pokete
+            poke2: Second parent pokete
+            index1: Index of first parent in player's team
+            index2: Index of second parent in player's team
+            current_time: Current game time
 
         Returns True if breeding started successfully, False otherwise.
         """
@@ -193,19 +211,24 @@ class BreedingManager:
 
         self.parent1 = poke1
         self.parent2 = poke2
+        self.parent1_index = index1
+        self.parent2_index = index2
         self.start_time = current_time
         self.egg_ready = False
         self.egg = None
         self._notified = False
         return True
 
-    def _compute_weighted_stat(
-        self, stat1: int, stat2: int, weight1: float = 0.5, weight2: float = 0.5
-    ) -> int:
-        """Compute weighted average of two stats with some random variation."""
-        base = stat1 * weight1 + stat2 * weight2
+    def _compute_stat_bonus(self, stat1: int, stat2: int) -> int:
+        """Compute bonus stat from parents' stats.
+        
+        Returns a bonus value based on weighted average of parents' stats
+        with some random variation.
+        """
+        base = (stat1 + stat2) / 2
         variation = random.uniform(-0.1, 0.1) * base
-        return max(1, int(base + variation))
+        # Return bonus (can be positive or negative relative to base species)
+        return int(variation + (base * 0.1))  # 10% of average as bonus
 
     def _select_offspring_identifier(self) -> str:
         """Select which pokete the offspring will be based on."""
@@ -285,7 +308,10 @@ class BreedingManager:
         return inherited
 
     def compute_hatch_time(self) -> int:
-        """Compute how long the egg needs to hatch based on parents."""
+        """Compute how long the egg needs to hatch based on parents.
+        
+        Includes multi-type bonus: 10% reduction when sharing 2+ types.
+        """
         if self.parent1 is None or self.parent2 is None:
             return BASE_HATCH_TIME
 
@@ -293,7 +319,15 @@ class BreedingManager:
         avg_level = (self.parent1.lvl() + self.parent2.lvl()) / 2
         # Higher level parents = slightly faster hatching
         level_modifier = max(0.5, 1.0 - (avg_level / 100))
-        return int(BASE_HATCH_TIME * level_modifier)
+        
+        base_time = int(BASE_HATCH_TIME * level_modifier)
+        
+        # Apply multi-type bonus if sharing 2+ types
+        shared_types = self.get_shared_types(self.parent1, self.parent2)
+        if len(shared_types) >= 2:
+            base_time = int(base_time * (1.0 - MULTI_TYPE_BONUS))
+        
+        return base_time
 
     def generate_egg(self) -> EggData | None:
         """Generate egg data based on the breeding pair."""
@@ -302,36 +336,25 @@ class BreedingManager:
 
         pokes = asset_service.get_base_assets().pokes
         offspring_id = self._select_offspring_identifier()
-        base_poke = pokes[offspring_id]
 
-        # Compute stats as weighted average of parents' base stats + offspring base
+        # Compute stat bonuses from parents' base stats
         p1_inf = self.parent1.inf
         p2_inf = self.parent2.inf
 
-        # Weight: 40% parent1, 40% parent2, 20% base offspring stats
-        hp = self._compute_weighted_stat(p1_inf.hp, p2_inf.hp, 0.4, 0.4)
-        hp = int(hp * 0.8 + base_poke.hp * 0.2)
-
-        atc = self._compute_weighted_stat(p1_inf.atc, p2_inf.atc, 0.4, 0.4)
-        atc = int(atc * 0.8 + base_poke.atc * 0.2)
-
-        defense = self._compute_weighted_stat(p1_inf.defense, p2_inf.defense, 0.4, 0.4)
-        defense = int(defense * 0.8 + base_poke.defense * 0.2)
-
-        initiative = self._compute_weighted_stat(
-            p1_inf.initiative, p2_inf.initiative, 0.4, 0.4
-        )
-        initiative = int(initiative * 0.8 + base_poke.initiative * 0.2)
+        hp_bonus = self._compute_stat_bonus(p1_inf.hp, p2_inf.hp)
+        atc_bonus = self._compute_stat_bonus(p1_inf.atc, p2_inf.atc)
+        defense_bonus = self._compute_stat_bonus(p1_inf.defense, p2_inf.defense)
+        initiative_bonus = self._compute_stat_bonus(p1_inf.initiative, p2_inf.initiative)
 
         # Compute inherited moves
         inherited_moves = self._compute_inherited_moves(offspring_id)
 
         return EggData(
             identifier=offspring_id,
-            hp=max(10, hp),  # Minimum HP of 10
-            atc=max(0, atc),
-            defense=max(0, defense),
-            initiative=max(0, initiative),
+            hp_bonus=hp_bonus,
+            atc_bonus=max(0, atc_bonus),  # Don't go negative
+            defense_bonus=max(0, defense_bonus),
+            initiative_bonus=max(0, initiative_bonus),
             hatch_time=self.compute_hatch_time(),
             parent1_identifier=self.parent1.identifier,
             parent2_identifier=self.parent2.identifier,
@@ -405,10 +428,10 @@ class BreedingManager:
         # Get base attacks for the offspring
         pokes = asset_service.get_base_assets().pokes
         base_poke = pokes.get(self.egg.identifier)
-        base_attacks = base_poke.attacks[:4] if base_poke else []
+        base_attacks = list(base_poke.attacks[:4]) if base_poke else []
 
         # Add inherited moves (replace last attacks if needed)
-        final_attacks = list(base_attacks)
+        final_attacks = base_attacks.copy()
         for move in self.egg.inherited_moves:
             if len(final_attacks) < 4:
                 final_attacks.append(move)
@@ -427,6 +450,18 @@ class BreedingManager:
             nature=None,  # Random nature
             stats=None,
         )
+
+        # Apply stat bonuses from breeding
+        # These are added on top of the computed stats
+        new_poke.hp = max(1, new_poke.hp + self.egg.hp_bonus)
+        new_poke.full_hp = new_poke.hp
+        new_poke.atc = max(0, new_poke.atc + self.egg.atc_bonus)
+        new_poke.defense = max(0, new_poke.defense + self.egg.defense_bonus)
+        new_poke.initiative = max(0, new_poke.initiative + self.egg.initiative_bonus)
+
+        # Update HP bar to reflect new HP
+        new_poke.hp_bar.make(new_poke.hp)
+        new_poke.text_hp.rechar(f"HP:{new_poke.hp}")
 
         # Set breeding-related stats info
         new_poke.poke_stats = Stats(
@@ -456,6 +491,8 @@ class BreedingManager:
         # Reset breeding state
         self.parent1 = None
         self.parent2 = None
+        self.parent1_index = None
+        self.parent2_index = None
         self.start_time = 0
         self.egg_ready = False
         self.egg = None
@@ -463,16 +500,23 @@ class BreedingManager:
 
         return new_poke
 
-    def cancel_breeding(self) -> tuple[Poke | None, Poke | None]:
-        """Cancel breeding and return the parents."""
+    def cancel_breeding(self) -> tuple[Poke | None, Poke | None, int | None, int | None]:
+        """Cancel breeding and return the parents with their original indices.
+        
+        Returns:
+            Tuple of (parent1, parent2, parent1_index, parent2_index)
+        """
         p1, p2 = self.parent1, self.parent2
+        idx1, idx2 = self.parent1_index, self.parent2_index
         self.parent1 = None
         self.parent2 = None
+        self.parent1_index = None
+        self.parent2_index = None
         self.start_time = 0
         self.egg_ready = False
         self.egg = None
         self._notified = False
-        return p1, p2
+        return p1, p2, idx1, idx2
 
     def has_breeding_pair(self) -> bool:
         """Check if there's an active breeding pair."""
@@ -501,6 +545,8 @@ class BreedingManager:
         return {
             "parent1": self.parent1.dict() if self.parent1 else None,
             "parent2": self.parent2.dict() if self.parent2 else None,
+            "parent1_index": self.parent1_index,
+            "parent2_index": self.parent2_index,
             "start_time": self.start_time,
             "egg_ready": self.egg_ready,
             "egg": self.egg.dict() if self.egg else None,
@@ -515,6 +561,8 @@ class BreedingManager:
         self.parent2 = (
             Poke.from_dict(data["parent2"]) if data.get("parent2") else None
         )
+        self.parent1_index = data.get("parent1_index")
+        self.parent2_index = data.get("parent2_index")
         self.start_time = data.get("start_time", 0)
         self.egg_ready = data.get("egg_ready", False)
         self.egg = EggData.from_dict(data["egg"]) if data.get("egg") else None

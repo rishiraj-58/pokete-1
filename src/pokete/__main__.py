@@ -55,13 +55,14 @@ from pokete.classes.multiplayer.interactions.context_menu import ContextMenu
 from pokete.classes.multiplayer.modeprovider import Mode, modeProvider
 from pokete.classes.multiplayer.pc_manager import pc_manager
 from pokete.classes.periodic_events import (
+    BreedingCheckEvent,
     MovingGrassEvent,
     MovingWaterEvent,
     NotifierEvent,
     TreatNPCEvent,
 )
 from pokete.classes.poke import Poke, Stats
-from pokete.classes.pokete_care import pokete_care, breeding_manager, BreedingCheckEvent
+from pokete.classes.pokete_care import pokete_care, breeding_manager
 from pokete.classes.pre_game import PreGameMap
 from pokete.classes.save import read_save, save
 from pokete.classes.settings import settings

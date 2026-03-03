@@ -83,11 +83,15 @@ class BreedingNPCAction(NPCAction):
         ])
 
         if ui.ask_bool("Would you like to cancel the breeding?"):
-            p1, p2 = self.manager.cancel_breeding()
-            # Return poketes - add_poke without index finds fallback slots
-            if p1:
+            p1, p2, idx1, idx2 = self.manager.cancel_breeding()
+            # Return poketes to their exact original slots
+            if p1 is not None and idx1 is not None:
+                npc.ctx.figure.add_poke(p1, idx1)
+            elif p1 is not None:
                 npc.ctx.figure.add_poke(p1)
-            if p2:
+            if p2 is not None and idx2 is not None:
+                npc.ctx.figure.add_poke(p2, idx2)
+            elif p2 is not None:
                 npc.ctx.figure.add_poke(p2)
             npc.text(["Breeding cancelled. Your poketes have been returned."])
         elif self.manager.history and ui.ask_bool("Would you like to see your breeding history?"):
@@ -163,23 +167,28 @@ class BreedingNPCAction(NPCAction):
         poke2_ref = poke2
 
         # Replace poketes with fallbacks (same pattern as PoketeCareNPCAction)
-        # This properly removes them from the team while keeping slots
         npc.ctx.figure.add_poke(Poke("__fallback__", 0), index1)
         npc.ctx.figure.add_poke(Poke("__fallback__", 0), index2)
 
-        # Start breeding with the stored references
-        if self.manager.start_breeding(poke1_ref, poke2_ref, timer.time.time):
+        # Start breeding with the stored references and indices
+        if self.manager.start_breeding(poke1_ref, poke2_ref, index1, index2, timer.time.time):
             hatch_time = self.manager.compute_hatch_time()
             shared_types = self.manager.get_shared_types(poke1_ref, poke2_ref)
+            
+            # Show multi-type bonus info
+            bonus_msg = ""
+            if len(shared_types) >= 2:
+                bonus_msg = " (10% time bonus for sharing multiple types!)"
+            
             npc.text([
                 f"Great! {poke1_ref.name} and {poke2_ref.name} will start breeding.",
-                f"They share these types: {', '.join(shared_types)}",
+                f"They share these types: {', '.join(shared_types)}{bonus_msg}",
                 f"Come back in about {hatch_time} time units to collect your egg!"
             ])
         else:
-            # Return poketes if breeding failed - add_poke finds fallback slots
-            npc.ctx.figure.add_poke(poke1_ref)
-            npc.ctx.figure.add_poke(poke2_ref)
+            # Return poketes if breeding failed - restore to exact slots
+            npc.ctx.figure.add_poke(poke1_ref, index1)
+            npc.ctx.figure.add_poke(poke2_ref, index2)
             npc.text(["Something went wrong. Breeding could not start."])
 
     def _show_history(self, npc: NPCInterface):
