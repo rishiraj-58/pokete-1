@@ -49,33 +49,6 @@ gained {add_xp}xp and reached level {self.care.poke.lvl()}!"])
         npc.text(["See you!"])
 
 
-def apply_inherited_stats(poke: Poke, inherited_stats: dict) -> None:
-    """Apply inherited stats from breeding to a Poke.
-
-    This modifies the poke's base stats (atc, defense, initiative) based on
-    the weighted average computed from the parents.
-    """
-    if not inherited_stats:
-        return
-
-    # Apply inherited stats as bonuses/penalties relative to base
-    # The inherited values are absolute, so we calculate the difference
-    # from the species base and apply it
-    base_atc = poke.inf.atc
-    base_defense = poke.inf.defense
-    base_initiative = poke.inf.initiative
-
-    # Calculate bonus/penalty from inherited stats
-    atc_bonus = inherited_stats.get("atc", base_atc) - base_atc
-    defense_bonus = inherited_stats.get("defense", base_defense) - base_defense
-    initiative_bonus = inherited_stats.get("initiative", base_initiative) - base_initiative
-
-    # Apply bonuses to current stats
-    poke.atc = max(0, poke.atc + atc_bonus)
-    poke.defense = max(0, poke.defense + defense_bonus)
-    poke.initiative = max(0, poke.initiative + initiative_bonus)
-
-
 class BreedingNPCAction(NPCAction):
     """NPC action for the breeding facility."""
 
@@ -85,10 +58,18 @@ class BreedingNPCAction(NPCAction):
     def act(self, npc: NPCInterface, ui: UIInterface):
         current_time = timer.time.time
 
+        # Set current map for climate calculations
+        if hasattr(npc.ctx, 'map') and hasattr(npc.ctx.map, 'name'):
+            self.breeding.set_current_map(npc.ctx.map.name)
+
         if self.breeding.has_breeding_pair:
             self._handle_existing_breeding(npc, ui, current_time)
         else:
             self._handle_new_breeding(npc, ui, current_time)
+
+        # Offer to view history
+        if self.breeding.history and ui.ask_bool("Would you like to view breeding history?"):
+            self._show_history(npc)
 
         npc.text(["See you!"])
 
@@ -101,21 +82,18 @@ class BreedingNPCAction(NPCAction):
             if ui.ask_bool("Would you like to collect your new Pokete?"):
                 offspring_data = self.breeding.collect_egg(current_time)
                 if offspring_data:
-                    # Extract inherited stats before creating poke
-                    inherited_stats = offspring_data.pop("inherited_stats", {})
-
                     new_poke = Poke.from_dict(offspring_data)
-
-                    # Apply inherited stats from parents
-                    apply_inherited_stats(new_poke, inherited_stats)
-
+                    # Apply inherited stats to the new poke
+                    inherited = offspring_data.get("inherited_stats", {})
+                    if inherited:
+                        self._apply_inherited_stats(new_poke, inherited)
                     npc.ctx.figure.add_poke(new_poke)
                     npc.ctx.figure.caught_pokes.append(new_poke.identifier)
-
                     shiny_msg = " (Shiny!)" if new_poke.shiny else ""
+                    stats_msg = self._format_inherited_stats(inherited)
                     npc.text([
                         f"Congratulations! A {new_poke.name}{shiny_msg} has hatched!",
-                        "It inherited stats from its parents.",
+                        stats_msg,
                         "Take good care of it!"
                     ])
         else:
@@ -135,6 +113,31 @@ class BreedingNPCAction(NPCAction):
                     npc.ctx.figure.add_poke(parent2)
                     npc.text(["Breeding cancelled. Your Poketes are back."])
 
+    def _apply_inherited_stats(self, poke: Poke, inherited_stats: dict):
+        """Apply inherited stats to a newly hatched Poke.
+        
+        Uses max(0, value) guards to ensure no stat goes negative.
+        """
+        if "atc" in inherited_stats:
+            poke.atc = max(0, inherited_stats["atc"])
+        if "defense" in inherited_stats:
+            poke.defense = max(0, inherited_stats["defense"])
+        if "initiative" in inherited_stats:
+            poke.initiative = max(0, inherited_stats["initiative"])
+
+    def _format_inherited_stats(self, inherited_stats: dict) -> str:
+        """Format inherited stats for display."""
+        if not inherited_stats:
+            return "Inherited stats: N/A"
+        parts = []
+        if "atc" in inherited_stats:
+            parts.append(f"ATK:{inherited_stats['atc']}")
+        if "defense" in inherited_stats:
+            parts.append(f"DEF:{inherited_stats['defense']}")
+        if "initiative" in inherited_stats:
+            parts.append(f"INIT:{inherited_stats['initiative']}")
+        return f"Inherited stats: {', '.join(parts)}"
+
     def _handle_new_breeding(
         self, npc: NPCInterface, ui: UIInterface, current_time: int
     ):
@@ -144,10 +147,6 @@ class BreedingNPCAction(NPCAction):
             "Here, two compatible Poketes can produce an egg.",
             "Poketes are compatible if they share at least one type."
         ])
-
-        # Offer to view history or start breeding
-        if ui.ask_bool("Would you like to view breeding history?"):
-            self._show_breeding_history(npc)
 
         if not ui.ask_bool("Would you like to start breeding?"):
             return
@@ -181,23 +180,23 @@ class BreedingNPCAction(NPCAction):
             ])
             return
 
-        # Show compatibility info including shiny bonus
+        # Show compatibility info
         shared_types = self.breeding.get_shared_types(poke1, poke2)
         hatch_time = self.breeding.compute_hatch_time(poke1, poke2)
         hours = hatch_time // 60
         minutes = hatch_time % 60
 
-        shiny_info = []
+        # Show shiny bonus info if applicable
+        shiny_info = ""
         if poke1.shiny and poke2.shiny:
-            shiny_info = ["Both parents are shiny! Offspring has 1/125 shiny chance!"]
+            shiny_info = " (Both parents shiny: 4x shiny chance!)"
         elif poke1.shiny or poke2.shiny:
-            shiny_info = ["One parent is shiny! Offspring has 1/250 shiny chance!"]
+            shiny_info = " (Shiny parent: 2x shiny chance!)"
 
         npc.text([
-            f"{poke1.name} and {poke2.name} are compatible!",
+            f"{poke1.name} and {poke2.name} are compatible!{shiny_info}",
             f"Shared types: {', '.join(shared_types)}",
-            f"Estimated hatching time: {hours}h {minutes}m",
-            *shiny_info
+            f"Estimated hatching time: {hours}h {minutes}m"
         ])
 
         if ui.ask_bool("Do you want to proceed with breeding?"):
@@ -215,17 +214,21 @@ class BreedingNPCAction(NPCAction):
             else:
                 npc.text(["Sorry, something went wrong. Please try again."])
 
-    def _show_breeding_history(self, npc: NPCInterface):
-        """Display breeding history to the player."""
-        history = self.breeding.history
+    def _show_history(self, npc: NPCInterface):
+        """Display the breeding history to the user (most recent first)."""
+        history = self.breeding.get_history()
         if not history:
-            npc.text(["No breeding history yet."])
+            npc.text(["No breeding history available."])
             return
 
-        npc.text([f"Your last {len(history)} breeding results:"])
-        for entry in history:
-            shiny_marker = " *SHINY*" if entry.was_shiny else ""
+        npc.text(["=== Breeding History (Last 5) ==="])
+        for i, entry in enumerate(history, 1):
+            shiny_marker = " *SHINY*" if entry.offspring_shiny else ""
+            stats = entry.inherited_stats
+            stats_str = ""
+            if stats:
+                stats_str = f" [ATK:{stats.get('atc', '?')}, DEF:{stats.get('defense', '?')}, INIT:{stats.get('initiative', '?')}]"
             npc.text([
-                f"{entry.parent1_name} + {entry.parent2_name}",
-                f"  -> {entry.offspring_name}{shiny_marker}"
+                f"{i}. {entry.parent1_name} x {entry.parent2_name}",
+                f"   -> {entry.offspring_name}{shiny_marker}{stats_str}"
             ])

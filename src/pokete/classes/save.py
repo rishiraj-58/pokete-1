@@ -117,7 +117,9 @@ def read_save():
 
     # Ensure breeding key exists for older saves
     if "breeding" not in _si:
-        _si["breeding"] = {"breeding_pair": None}
+        _si["breeding"] = {"breeding_pair": None, "history": []}
+    elif "history" not in _si["breeding"]:
+        _si["breeding"]["history"] = []
 
     return _si
 

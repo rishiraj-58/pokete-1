@@ -21,8 +21,34 @@ if TYPE_CHECKING:
 # Base hatching time in in-game minutes (configurable)
 BASE_HATCH_TIME = 300  # 5 in-game hours
 
-# Maximum breeding history entries to keep
-MAX_BREEDING_HISTORY = 5
+# Maximum number of breeding history entries to keep
+MAX_HISTORY_SIZE = 5
+
+# Shiny chance constants
+BASE_SHINY_CHANCE = 500  # 1 in 500
+SINGLE_SHINY_PARENT_CHANCE = 250  # 1 in 250 (halved)
+BOTH_SHINY_PARENTS_CHANCE = 125  # 1 in 125 (halved again)
+
+# Climate multiplier bounds
+CLIMATE_MULTIPLIER_MIN = 0.6
+CLIMATE_MULTIPLIER_MAX = 1.2
+CLIMATE_BONUS = 0.2  # 20% faster when climate matches
+
+# Map name patterns to biome types
+MAP_BIOME_PATTERNS: dict[str, list[str]] = {
+    "water": ["water", "ocean", "sea", "lake", "river", "beach", "bay", "pond"],
+    "cave": ["cave", "cavern", "underground", "mine", "tunnel"],
+    "ice": ["ice", "snow", "frozen", "arctic", "glacier", "winter", "cold"],
+    "fire": ["fire", "volcano", "lava", "magma", "heat", "desert", "hot"],
+    "forest": ["forest", "wood", "jungle", "tree", "grove", "meadow"],
+    "flying": ["sky", "mountain", "peak", "cliff", "tower", "height"],
+    "stone": ["rock", "stone", "boulder", "mountain", "cave", "mine"],
+    "ground": ["ground", "earth", "dirt", "sand", "desert", "plains"],
+    "plant": ["forest", "garden", "meadow", "grass", "jungle", "grove"],
+    "electric": ["power", "electric", "thunder", "storm", "factory"],
+    "poison": ["swamp", "marsh", "toxic", "waste", "sewer"],
+    "undead": ["grave", "cemetery", "haunted", "dark", "night", "ghost"],
+}
 
 
 @dataclass
@@ -59,22 +85,22 @@ class BreedingPairData:
 
 @dataclass
 class BreedingHistoryEntry:
-    """Record of a completed breeding."""
+    """Entry in the breeding history log."""
     parent1_name: str
     parent2_name: str
     offspring_name: str
-    offspring_identifier: str
-    completed_time: str  # ISO format timestamp
-    was_shiny: bool
+    offspring_shiny: bool
+    timestamp: str
+    inherited_stats: dict
 
     def to_dict(self) -> dict:
         return {
             "parent1_name": self.parent1_name,
             "parent2_name": self.parent2_name,
             "offspring_name": self.offspring_name,
-            "offspring_identifier": self.offspring_identifier,
-            "completed_time": self.completed_time,
-            "was_shiny": self.was_shiny,
+            "offspring_shiny": self.offspring_shiny,
+            "timestamp": self.timestamp,
+            "inherited_stats": self.inherited_stats,
         }
 
     @classmethod
@@ -83,9 +109,9 @@ class BreedingHistoryEntry:
             parent1_name=data["parent1_name"],
             parent2_name=data["parent2_name"],
             offspring_name=data["offspring_name"],
-            offspring_identifier=data["offspring_identifier"],
-            completed_time=data["completed_time"],
-            was_shiny=data["was_shiny"],
+            offspring_shiny=data["offspring_shiny"],
+            timestamp=data["timestamp"],
+            inherited_stats=data.get("inherited_stats", {}),
         )
 
 
@@ -99,6 +125,7 @@ class BreedingManager:
     def __init__(self):
         self._breeding_pair: BreedingPairData | None = None
         self._history: list[BreedingHistoryEntry] = []
+        self._current_map_name: str | None = None
 
     @property
     def has_breeding_pair(self) -> bool:
@@ -110,25 +137,102 @@ class BreedingManager:
 
     @property
     def history(self) -> list[BreedingHistoryEntry]:
-        """Get the breeding history (most recent first)."""
-        return list(reversed(self._history))
+        """Return history with most recent entries first."""
+        return list(self._history)
+
+    def set_current_map(self, map_name: str):
+        """Set the current map name for climate calculations."""
+        self._current_map_name = map_name
 
     def are_compatible(self, poke1: "Poke", poke2: "Poke") -> bool:
         """Check if two Poketes can breed (share at least one type)."""
-        types1 = set(poke1.inf.types)
-        types2 = set(poke2.inf.types)
+        types1 = set(t.name for t in poke1.types)
+        types2 = set(t.name for t in poke2.types)
         return len(types1 & types2) > 0
 
     def get_shared_types(self, poke1: "Poke", poke2: "Poke") -> list[str]:
         """Get the types shared between two Poketes."""
-        types1 = set(poke1.inf.types)
-        types2 = set(poke2.inf.types)
+        types1 = set(t.name for t in poke1.types)
+        types2 = set(t.name for t in poke2.types)
         return list(types1 & types2)
 
-    def compute_hatch_time(self, poke1: "Poke", poke2: "Poke") -> int:
-        """Compute hatching time based on parents' levels and compatibility.
+    def _get_primary_type(self, poke: "Poke") -> str:
+        """Get the primary (first) type of a Pokete."""
+        if poke.types:
+            return poke.types[0].name
+        return "normal"
+
+    def _get_map_biome(self, map_name: str | None) -> str | None:
+        """Determine biome type from map name using pattern matching."""
+        if not map_name:
+            return None
+
+        map_lower = map_name.lower()
+        for biome, patterns in MAP_BIOME_PATTERNS.items():
+            for pattern in patterns:
+                if pattern in map_lower:
+                    return biome
+        return None
+
+    def compute_climate_multiplier(
+        self, poke1: "Poke", poke2: "Poke", map_name: str | None = None
+    ) -> float:
+        """Compute climate multiplier based on map biome and parent types.
+
+        Returns a multiplier between CLIMATE_MULTIPLIER_MIN (0.6) and
+        CLIMATE_MULTIPLIER_MAX (1.2). Lower is faster.
+
+        - Perfect match (both parents' primary type matches biome): 0.6
+        - One parent matches: 0.8
+        - No match: 1.0
+        - Opposing biome: 1.2
+        """
+        if map_name is None:
+            map_name = self._current_map_name
+
+        biome = self._get_map_biome(map_name)
+        if biome is None:
+            return 1.0
+
+        primary1 = self._get_primary_type(poke1)
+        primary2 = self._get_primary_type(poke2)
+
+        # Check for matches
+        match_count = 0
+        if primary1 == biome:
+            match_count += 1
+        if primary2 == biome:
+            match_count += 1
+
+        # Check for opposing types (fire in ice biome, etc.)
+        opposing_pairs = [
+            ("fire", "ice"), ("fire", "water"),
+            ("water", "fire"), ("ice", "fire"),
+            ("plant", "fire"), ("flying", "ground"),
+        ]
+
+        is_opposing = False
+        for p_type, b_type in opposing_pairs:
+            if biome == b_type and (primary1 == p_type or primary2 == p_type):
+                is_opposing = True
+                break
+
+        if match_count == 2:
+            return CLIMATE_MULTIPLIER_MIN  # 0.6 - both match
+        elif match_count == 1:
+            return 1.0 - CLIMATE_BONUS  # 0.8 - one matches
+        elif is_opposing:
+            return CLIMATE_MULTIPLIER_MAX  # 1.2 - opposing
+        else:
+            return 1.0  # neutral
+
+    def compute_hatch_time(
+        self, poke1: "Poke", poke2: "Poke", map_name: str | None = None
+    ) -> int:
+        """Compute hatching time based on parents' levels, compatibility, and climate.
 
         Higher level parents and more shared types result in faster hatching.
+        Climate matching the parents' types also reduces hatch time.
         Returns time in in-game minutes.
         """
         shared_types = len(self.get_shared_types(poke1, poke2))
@@ -140,7 +244,10 @@ class BreedingManager:
         # Higher level parents hatch faster (max 30% reduction at lvl 50+)
         level_multiplier = max(0.7, 1.0 - (avg_level / 50) * 0.3)
 
-        return int(BASE_HATCH_TIME * type_multiplier * level_multiplier)
+        # Climate influence
+        climate_multiplier = self.compute_climate_multiplier(poke1, poke2, map_name)
+
+        return int(BASE_HATCH_TIME * type_multiplier * level_multiplier * climate_multiplier)
 
     def _select_offspring_identifier(
         self, poke1: "Poke", poke2: "Poke"
@@ -177,36 +284,31 @@ class BreedingManager:
         return None
 
     def _compute_weighted_stat(
-        self, stat1: int, stat2: int, weight1: float = 0.5
+        self, stat1: int, stat2: int, weight: float = 0.5
     ) -> int:
         """Compute weighted average of two stats."""
-        weight2 = 1.0 - weight1
-        return int(stat1 * weight1 + stat2 * weight2)
+        return int(stat1 * weight + stat2 * (1.0 - weight))
 
     def _compute_shiny_chance(self, poke1: "Poke", poke2: "Poke") -> int:
-        """Compute shiny chance denominator based on parent shininess.
+        """Compute shiny chance based on parent shininess.
 
-        Base chance: 1/500
-        One shiny parent: 1/250 (halved)
-        Both shiny parents: 1/125 (halved again)
+        Base chance is 1/500.
+        If one parent is shiny: 1/250 (halved).
+        If both parents are shiny: 1/125 (halved again).
         """
-        base_chance = 500
-        shiny_count = sum([poke1.shiny, poke2.shiny])
-
-        if shiny_count == 1:
-            return base_chance // 2  # 250
-        elif shiny_count == 2:
-            return base_chance // 4  # 125
-        return base_chance
+        if poke1.shiny and poke2.shiny:
+            return BOTH_SHINY_PARENTS_CHANCE
+        elif poke1.shiny or poke2.shiny:
+            return SINGLE_SHINY_PARENT_CHANCE
+        return BASE_SHINY_CHANCE
 
     def compute_offspring_stats(
         self, poke1: "Poke", poke2: "Poke", offspring_identifier: str
     ) -> dict:
         """Compute the offspring's inherited stats.
 
-        Stats (atc, defense, initiative) are weighted averages of parents' 
-        base stats with some randomness. Returns a dict that can be used 
-        to create the offspring Poke.
+        Stats (atc, defense, initiative) are weighted averages of parents' stats.
+        Returns a dict that can be used to create the offspring Poke.
         """
         # Random weight between 0.3 and 0.7 for variety
         weight = random.uniform(0.3, 0.7)
@@ -214,7 +316,7 @@ class BreedingManager:
         # The offspring starts at level 1 (xp = 0)
         base_xp = 0
 
-        # Compute weighted averages of parent stats
+        # Compute inherited stats as weighted averages
         inherited_atc = self._compute_weighted_stat(
             poke1.inf.atc, poke2.inf.atc, weight
         )
@@ -225,7 +327,7 @@ class BreedingManager:
             poke1.inf.initiative, poke2.inf.initiative, weight
         )
 
-        # Determine if shiny based on parent shininess
+        # Determine if shiny using the shiny parent bonus
         shiny_chance = self._compute_shiny_chance(poke1, poke2)
         is_shiny = random.randint(0, shiny_chance - 1) == 0
 
@@ -236,6 +338,12 @@ class BreedingManager:
             base_attacks = offspring_data.attacks[:4]
         else:
             base_attacks = []
+
+        inherited_stats = {
+            "atc": inherited_atc,
+            "defense": inherited_defense,
+            "initiative": inherited_initiative,
+        }
 
         return {
             "name": offspring_identifier,
@@ -256,12 +364,7 @@ class BreedingManager:
                 "caught_with": "breeding",
                 "run_away": 0,
             },
-            # Inherited stats for post-creation application
-            "inherited_stats": {
-                "atc": inherited_atc,
-                "defense": inherited_defense,
-                "initiative": inherited_initiative,
-            },
+            "inherited_stats": inherited_stats,
         }
 
     def start_breeding(
@@ -316,28 +419,6 @@ class BreedingManager:
         if self._breeding_pair is not None:
             self._breeding_pair.notified = True
 
-    def _add_to_history(
-        self,
-        parent1_name: str,
-        parent2_name: str,
-        offspring_name: str,
-        offspring_identifier: str,
-        was_shiny: bool,
-    ):
-        """Add a breeding result to history."""
-        entry = BreedingHistoryEntry(
-            parent1_name=parent1_name,
-            parent2_name=parent2_name,
-            offspring_name=offspring_name,
-            offspring_identifier=offspring_identifier,
-            completed_time=datetime.now().isoformat(),
-            was_shiny=was_shiny,
-        )
-        self._history.append(entry)
-        # Keep only the last MAX_BREEDING_HISTORY entries
-        if len(self._history) > MAX_BREEDING_HISTORY:
-            self._history = self._history[-MAX_BREEDING_HISTORY:]
-
     def collect_egg(self, current_time: int) -> dict | None:
         """Collect the hatched egg and return offspring data.
 
@@ -360,24 +441,44 @@ class BreedingManager:
             parent1, parent2, self._breeding_pair.offspring_identifier
         )
 
-        # Get offspring name for history
-        pokes = asset_service.get_base_assets().pokes
-        offspring_poke_data = pokes.get(offspring_data["name"])
-        offspring_name = (
-            offspring_poke_data.name if offspring_poke_data else offspring_data["name"]
-        )
-
-        # Add to history
+        # Add to breeding history
         self._add_to_history(
             parent1_name=parent1.name,
             parent2_name=parent2.name,
-            offspring_name=offspring_name,
-            offspring_identifier=offspring_data["name"],
-            was_shiny=offspring_data["shiny"],
+            offspring_name=self._breeding_pair.offspring_identifier,
+            offspring_shiny=offspring_data["shiny"],
+            inherited_stats=offspring_data.get("inherited_stats", {}),
         )
 
         self._breeding_pair = None
         return offspring_data
+
+    def _add_to_history(
+        self,
+        parent1_name: str,
+        parent2_name: str,
+        offspring_name: str,
+        offspring_shiny: bool,
+        inherited_stats: dict,
+    ):
+        """Add a breeding result to the history log (most recent first)."""
+        entry = BreedingHistoryEntry(
+            parent1_name=parent1_name,
+            parent2_name=parent2_name,
+            offspring_name=offspring_name,
+            offspring_shiny=offspring_shiny,
+            timestamp=datetime.now().isoformat(),
+            inherited_stats=inherited_stats,
+        )
+        # Insert at beginning so most recent is first
+        self._history.insert(0, entry)
+        # Keep only the first MAX_HISTORY_SIZE entries
+        if len(self._history) > MAX_HISTORY_SIZE:
+            self._history = self._history[:MAX_HISTORY_SIZE]
+
+    def get_history(self) -> list[BreedingHistoryEntry]:
+        """Get the breeding history log (last 5 entries)."""
+        return list(self._history)
 
     def cancel_breeding(self) -> tuple[dict, dict] | None:
         """Cancel current breeding and return parent data.
@@ -413,11 +514,14 @@ class BreedingManager:
         else:
             self._breeding_pair = None
 
-        # Restore history
         history_data = data.get("history", [])
         self._history = [
             BreedingHistoryEntry.from_dict(entry) for entry in history_data
         ]
+
+    def clear_history(self):
+        """Clear the breeding history."""
+        self._history = []
 
 
 # Global breeding manager instance
