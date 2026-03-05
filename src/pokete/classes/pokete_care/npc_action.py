@@ -58,6 +58,10 @@ class BreedingNPCAction(NPCAction):
     def act(self, npc: NPCInterface, ui: UIInterface):
         current_time = timer.time.time
 
+        # Set current map for climate calculations
+        if hasattr(npc.ctx, 'map') and hasattr(npc.ctx.map, 'name'):
+            self.breeding.set_current_map(npc.ctx.map.name)
+
         if self.breeding.has_breeding_pair:
             self._handle_existing_breeding(npc, ui, current_time)
         else:
@@ -110,13 +114,16 @@ class BreedingNPCAction(NPCAction):
                     npc.text(["Breeding cancelled. Your Poketes are back."])
 
     def _apply_inherited_stats(self, poke: Poke, inherited_stats: dict):
-        """Apply inherited stats to a newly hatched Poke."""
+        """Apply inherited stats to a newly hatched Poke.
+        
+        Stats are guarded to never go below 0.
+        """
         if "atc" in inherited_stats:
-            poke.atc = inherited_stats["atc"]
+            poke.atc = max(0, inherited_stats["atc"])
         if "defense" in inherited_stats:
-            poke.defense = inherited_stats["defense"]
+            poke.defense = max(0, inherited_stats["defense"])
         if "initiative" in inherited_stats:
-            poke.initiative = inherited_stats["initiative"]
+            poke.initiative = max(0, inherited_stats["initiative"])
 
     def _format_inherited_stats(self, inherited_stats: dict) -> str:
         """Format inherited stats for display."""
@@ -208,14 +215,14 @@ class BreedingNPCAction(NPCAction):
                 npc.text(["Sorry, something went wrong. Please try again."])
 
     def _show_history(self, npc: NPCInterface):
-        """Display the breeding history to the user."""
+        """Display the breeding history to the user (most recent first)."""
         history = self.breeding.get_history()
         if not history:
             npc.text(["No breeding history available."])
             return
 
         npc.text(["=== Breeding History (Last 5) ==="])
-        for i, entry in enumerate(reversed(history), 1):
+        for i, entry in enumerate(history, 1):
             shiny_marker = " *SHINY*" if entry.offspring_shiny else ""
             stats = entry.inherited_stats
             stats_str = ""

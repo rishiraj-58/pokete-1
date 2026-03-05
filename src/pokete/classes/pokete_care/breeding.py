@@ -29,6 +29,29 @@ BASE_SHINY_CHANCE = 500  # 1 in 500
 SINGLE_SHINY_PARENT_CHANCE = 250  # 1 in 250 (halved)
 BOTH_SHINY_PARENTS_CHANCE = 125  # 1 in 125 (halved again)
 
+# Climate multiplier bounds
+CLIMATE_MULTIPLIER_MIN = 0.6
+CLIMATE_MULTIPLIER_MAX = 1.2
+CLIMATE_BONUS = 0.2  # 20% bonus for matching climate
+
+# Biome keywords mapped to type affinities
+BIOME_TYPE_AFFINITIES: dict[str, list[str]] = {
+    "cave": ["stone", "ground", "undead"],
+    "sea": ["water"],
+    "lake": ["water"],
+    "beach": ["water", "ground"],
+    "forest": ["plant", "normal", "bird"],
+    "meadow": ["plant", "normal"],
+    "field": ["plant", "ground", "normal"],
+    "mountain": ["stone", "ground", "flying"],
+    "temple": ["undead", "normal"],
+    "village": ["normal"],
+    "town": ["normal"],
+    "house": ["normal"],
+    "route": ["normal", "flying"],
+    "arena": ["normal"],
+}
+
 
 @dataclass
 class BreedingPairData:
@@ -104,6 +127,7 @@ class BreedingManager:
     def __init__(self):
         self._breeding_pair: BreedingPairData | None = None
         self._history: list[BreedingHistoryEntry] = []
+        self._current_map_name: str | None = None
 
     @property
     def has_breeding_pair(self) -> bool:
@@ -115,24 +139,91 @@ class BreedingManager:
 
     @property
     def history(self) -> list[BreedingHistoryEntry]:
-        return self._history
+        """Return history with most recent entries first."""
+        return list(reversed(self._history))
+
+    def set_current_map(self, map_name: str):
+        """Set the current map name for climate calculations."""
+        self._current_map_name = map_name
+
+    def _get_poke_types(self, poke: "Poke") -> set[str]:
+        """Get the type names from a Poke object."""
+        return set(t.name for t in poke.types)
+
+    def _get_primary_type(self, poke: "Poke") -> str:
+        """Get the primary (first) type name of a Poke."""
+        if poke.types:
+            return poke.types[0].name
+        return "normal"
 
     def are_compatible(self, poke1: "Poke", poke2: "Poke") -> bool:
         """Check if two Poketes can breed (share at least one type)."""
-        types1 = set(poke1.inf.types)
-        types2 = set(poke2.inf.types)
+        types1 = self._get_poke_types(poke1)
+        types2 = self._get_poke_types(poke2)
         return len(types1 & types2) > 0
 
     def get_shared_types(self, poke1: "Poke", poke2: "Poke") -> list[str]:
         """Get the types shared between two Poketes."""
-        types1 = set(poke1.inf.types)
-        types2 = set(poke2.inf.types)
+        types1 = self._get_poke_types(poke1)
+        types2 = self._get_poke_types(poke2)
         return list(types1 & types2)
 
-    def compute_hatch_time(self, poke1: "Poke", poke2: "Poke") -> int:
-        """Compute hatching time based on parents' levels and compatibility.
+    def _infer_biome_from_map(self, map_name: str | None) -> str | None:
+        """Infer biome type from map name."""
+        if not map_name:
+            return None
+
+        map_name_lower = map_name.lower()
+        for biome_keyword in BIOME_TYPE_AFFINITIES:
+            if biome_keyword in map_name_lower:
+                return biome_keyword
+        return None
+
+    def compute_climate_multiplier(
+        self, poke1: "Poke", poke2: "Poke", map_name: str | None = None
+    ) -> float:
+        """Compute climate multiplier based on map biome and parent types.
+
+        Returns a multiplier between CLIMATE_MULTIPLIER_MIN (0.6) and
+        CLIMATE_MULTIPLIER_MAX (1.2).
+        """
+        if map_name is None:
+            map_name = self._current_map_name
+
+        biome = self._infer_biome_from_map(map_name)
+        if biome is None:
+            return 1.0  # No climate effect
+
+        affinity_types = BIOME_TYPE_AFFINITIES.get(biome, [])
+        if not affinity_types:
+            return 1.0
+
+        # Get primary types of both parents
+        primary1 = self._get_primary_type(poke1)
+        primary2 = self._get_primary_type(poke2)
+
+        # Count how many parents match the biome
+        matches = 0
+        if primary1 in affinity_types:
+            matches += 1
+        if primary2 in affinity_types:
+            matches += 1
+
+        # Calculate multiplier: 0 matches = 1.2 (slower), 1 match = 1.0, 2 matches = 0.6 (faster)
+        if matches == 2:
+            return CLIMATE_MULTIPLIER_MIN  # Both match: 40% faster
+        elif matches == 1:
+            return 1.0 - CLIMATE_BONUS  # One matches: 20% faster
+        else:
+            return CLIMATE_MULTIPLIER_MAX  # Neither matches: 20% slower
+
+    def compute_hatch_time(
+        self, poke1: "Poke", poke2: "Poke", map_name: str | None = None
+    ) -> int:
+        """Compute hatching time based on parents' levels, compatibility, and climate.
 
         Higher level parents and more shared types result in faster hatching.
+        Climate matching can reduce or increase time by up to 40%.
         Returns time in in-game minutes.
         """
         shared_types = len(self.get_shared_types(poke1, poke2))
@@ -144,7 +235,10 @@ class BreedingManager:
         # Higher level parents hatch faster (max 30% reduction at lvl 50+)
         level_multiplier = max(0.7, 1.0 - (avg_level / 50) * 0.3)
 
-        return int(BASE_HATCH_TIME * type_multiplier * level_multiplier)
+        # Climate influence
+        climate_multiplier = self.compute_climate_multiplier(poke1, poke2, map_name)
+
+        return int(BASE_HATCH_TIME * type_multiplier * level_multiplier * climate_multiplier)
 
     def _select_offspring_identifier(
         self, poke1: "Poke", poke2: "Poke"

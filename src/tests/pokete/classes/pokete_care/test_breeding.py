@@ -5,6 +5,12 @@ from unittest.mock import MagicMock, patch
 from dataclasses import dataclass
 
 
+class MockPokeType:
+    """Mock for PokeType class."""
+    def __init__(self, name: str):
+        self.name = name
+
+
 class MockResourcePoke:
     """Mock for asset_service poke data."""
     def __init__(
@@ -45,7 +51,10 @@ class MockResourcePoke:
 
 
 class MockPoke:
-    """Mock Poke class for testing."""
+    """Mock Poke class for testing.
+    
+    Uses MockPokeType objects in self.types to match the real Poke API.
+    """
     def __init__(
         self,
         identifier: str,
@@ -58,13 +67,16 @@ class MockPoke:
     ):
         self.identifier = identifier
         self.xp = xp
+        type_names = types or ["normal"]
         self.inf = MockResourcePoke(
             name=identifier,
-            types=types or ["normal"],
+            types=type_names,
             atc=atc,
             defense=defense,
             initiative=initiative,
         )
+        # types is a list of PokeType objects with .name attribute
+        self.types = [MockPokeType(t) for t in type_names]
         self.shiny = shiny
         self.name = identifier
         self.hp = 20
@@ -501,6 +513,19 @@ class TestComputeOffspringStats(unittest.TestCase):
         self.assertGreaterEqual(inherited["initiative"], 0)
         self.assertLessEqual(inherited["initiative"], 10)
 
+    def test_inherited_stats_never_negative(self):
+        """Test that inherited stats are never negative."""
+        # Even with 0 stats from both parents, result should be >= 0
+        poke1 = MockPoke("steini", types=["normal"], atc=0, defense=0, initiative=0)
+        poke2 = MockPoke("mowcow", types=["normal"], atc=0, defense=0, initiative=0)
+
+        stats = self.manager.compute_offspring_stats(poke1, poke2, "steini")
+
+        inherited = stats["inherited_stats"]
+        self.assertGreaterEqual(inherited["atc"], 0)
+        self.assertGreaterEqual(inherited["defense"], 0)
+        self.assertGreaterEqual(inherited["initiative"], 0)
+
 
 class TestShinyChance(unittest.TestCase):
     """Test cases for shiny chance computation."""
@@ -593,6 +618,136 @@ class TestFindBaseForm(unittest.TestCase):
         self.assertEqual(base, "vogli")
 
 
+class TestClimateInfluence(unittest.TestCase):
+    """Test cases for climate-influenced hatch time."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.asset_patcher = patch(
+            "pokete.classes.pokete_care.breeding.asset_service",
+            MockAssetService()
+        )
+        self.asset_patcher.start()
+
+        from pokete.classes.pokete_care.breeding import BreedingManager
+        self.manager = BreedingManager()
+
+    def tearDown(self):
+        self.asset_patcher.stop()
+
+    def test_infer_biome_cave(self):
+        """Test biome inference for cave maps."""
+        biome = self.manager._infer_biome_from_map("cave_1")
+        self.assertEqual(biome, "cave")
+
+        biome = self.manager._infer_biome_from_map("Nice Town Cave")
+        self.assertEqual(biome, "cave")
+
+    def test_infer_biome_water(self):
+        """Test biome inference for water maps."""
+        biome = self.manager._infer_biome_from_map("Sunnydale Lake")
+        self.assertEqual(biome, "lake")
+
+        biome = self.manager._infer_biome_from_map("Big Mountain Sea")
+        self.assertEqual(biome, "sea")
+
+    def test_infer_biome_forest(self):
+        """Test biome inference for forest maps."""
+        biome = self.manager._infer_biome_from_map("Deepest Forest")
+        self.assertEqual(biome, "forest")
+
+    def test_infer_biome_none(self):
+        """Test biome inference for unknown maps."""
+        biome = self.manager._infer_biome_from_map("unknown_map_xyz")
+        self.assertIsNone(biome)
+
+        biome = self.manager._infer_biome_from_map(None)
+        self.assertIsNone(biome)
+
+    def test_climate_multiplier_no_map(self):
+        """Test climate multiplier with no map set."""
+        poke1 = MockPoke("steini", types=["stone"])
+        poke2 = MockPoke("mowcow", types=["normal"])
+
+        multiplier = self.manager.compute_climate_multiplier(poke1, poke2, None)
+        self.assertEqual(multiplier, 1.0)
+
+    def test_climate_multiplier_both_match_cave(self):
+        """Test climate multiplier when both parents match cave biome."""
+        from pokete.classes.pokete_care.breeding import CLIMATE_MULTIPLIER_MIN
+
+        poke1 = MockPoke("steini", types=["stone"])
+        poke2 = MockPoke("lilstone", types=["ground"])
+
+        multiplier = self.manager.compute_climate_multiplier(poke1, poke2, "cave_1")
+        self.assertEqual(multiplier, CLIMATE_MULTIPLIER_MIN)  # 0.6
+
+    def test_climate_multiplier_one_match(self):
+        """Test climate multiplier when one parent matches biome."""
+        from pokete.classes.pokete_care.breeding import CLIMATE_BONUS
+
+        poke1 = MockPoke("karpi", types=["water"])  # Matches lake
+        poke2 = MockPoke("steini", types=["stone"])  # Doesn't match
+
+        multiplier = self.manager.compute_climate_multiplier(poke1, poke2, "Sunnydale Lake")
+        self.assertEqual(multiplier, 1.0 - CLIMATE_BONUS)  # 0.8
+
+    def test_climate_multiplier_no_match(self):
+        """Test climate multiplier when no parent matches biome."""
+        from pokete.classes.pokete_care.breeding import CLIMATE_MULTIPLIER_MAX
+
+        poke1 = MockPoke("wolfior", types=["fire"])
+        poke2 = MockPoke("steini", types=["stone"])
+
+        # Water biome, fire and stone don't match
+        multiplier = self.manager.compute_climate_multiplier(poke1, poke2, "Sunnydale Lake")
+        self.assertEqual(multiplier, CLIMATE_MULTIPLIER_MAX)  # 1.2
+
+    def test_climate_affects_hatch_time(self):
+        """Test that climate affects overall hatch time."""
+        poke1 = MockPoke("karpi", types=["water"])
+        poke2 = MockPoke("blub", types=["water"])
+
+        # Water types in water map should be faster
+        time_lake = self.manager.compute_hatch_time(poke1, poke2, "Sunnydale Lake")
+
+        # Water types in cave should be slower
+        time_cave = self.manager.compute_hatch_time(poke1, poke2, "cave_1")
+
+        self.assertLess(time_lake, time_cave)
+
+    def test_climate_multiplier_bounds(self):
+        """Test that climate multiplier stays within bounds."""
+        from pokete.classes.pokete_care.breeding import (
+            CLIMATE_MULTIPLIER_MIN,
+            CLIMATE_MULTIPLIER_MAX,
+        )
+
+        poke1 = MockPoke("steini", types=["stone"])
+        poke2 = MockPoke("mowcow", types=["normal"])
+
+        # Test various map names
+        for map_name in ["cave_1", "lake_1", "forest_1", "town_1", "route_1", None]:
+            multiplier = self.manager.compute_climate_multiplier(poke1, poke2, map_name)
+            self.assertGreaterEqual(multiplier, CLIMATE_MULTIPLIER_MIN)
+            self.assertLessEqual(multiplier, CLIMATE_MULTIPLIER_MAX)
+
+    def test_set_current_map(self):
+        """Test setting current map for climate calculations."""
+        poke1 = MockPoke("karpi", types=["water"])
+        poke2 = MockPoke("blub", types=["water"])
+
+        # Without setting map
+        time_no_map = self.manager.compute_hatch_time(poke1, poke2)
+
+        # Set lake map
+        self.manager.set_current_map("Sunnydale Lake")
+        time_with_lake = self.manager.compute_hatch_time(poke1, poke2)
+
+        # Lake should be faster for water types
+        self.assertLess(time_with_lake, time_no_map)
+
+
 class TestBreedingHistory(unittest.TestCase):
     """Test cases for breeding history."""
 
@@ -664,12 +819,36 @@ class TestBreedingHistory(unittest.TestCase):
         ):
             self.manager.collect_egg(current_time=1000 + hatch_time)
 
+        # history property returns most recent first
         entry = self.manager.history[0]
         self.assertEqual(entry.parent1_name, "steini")
         self.assertEqual(entry.parent2_name, "mowcow")
         self.assertIn("atc", entry.inherited_stats)
         self.assertIn("defense", entry.inherited_stats)
         self.assertIn("initiative", entry.inherited_stats)
+
+    def test_history_order_most_recent_first(self):
+        """Test that history returns most recent entries first."""
+        # Add multiple entries
+        for i in range(3):
+            poke1 = MockPoke(f"poke_{i}_a", types=["normal"])
+            poke2 = MockPoke(f"poke_{i}_b", types=["normal"])
+
+            self.manager.start_breeding(poke1, poke2, current_time=1000 + i * 1000)
+            hatch_time = self.manager.breeding_pair.hatch_time
+
+            with patch(
+                "pokete.classes.pokete_care.breeding.Poke.from_dict",
+                side_effect=lambda d: MockPoke(d["name"])
+            ):
+                self.manager.collect_egg(current_time=1000 + i * 1000 + hatch_time)
+
+        history = self.manager.history
+        self.assertEqual(len(history), 3)
+        # Most recent (i=2) should be first
+        self.assertEqual(history[0].parent1_name, "poke_2_a")
+        # Oldest (i=0) should be last
+        self.assertEqual(history[2].parent1_name, "poke_0_a")
 
     def test_history_serialization(self):
         """Test that history is serialized and restored correctly."""
@@ -751,6 +930,66 @@ class TestBreedingHistoryEntry(unittest.TestCase):
         self.assertEqual(restored.offspring_shiny, original.offspring_shiny)
         self.assertEqual(restored.timestamp, original.timestamp)
         self.assertEqual(restored.inherited_stats, original.inherited_stats)
+
+
+class TestApplyInheritedStats(unittest.TestCase):
+    """Test cases for applying inherited stats with negative guards."""
+
+    def test_apply_positive_stats(self):
+        """Test applying positive inherited stats."""
+        poke = MockPoke("test", types=["normal"], atc=1, defense=1, initiative=1)
+        inherited = {"atc": 10, "defense": 8, "initiative": 6}
+
+        # Simulate _apply_inherited_stats behavior
+        poke.atc = max(0, inherited["atc"])
+        poke.defense = max(0, inherited["defense"])
+        poke.initiative = max(0, inherited["initiative"])
+
+        self.assertEqual(poke.atc, 10)
+        self.assertEqual(poke.defense, 8)
+        self.assertEqual(poke.initiative, 6)
+
+    def test_apply_zero_stats(self):
+        """Test applying zero inherited stats."""
+        poke = MockPoke("test", types=["normal"], atc=5, defense=5, initiative=5)
+        inherited = {"atc": 0, "defense": 0, "initiative": 0}
+
+        poke.atc = max(0, inherited["atc"])
+        poke.defense = max(0, inherited["defense"])
+        poke.initiative = max(0, inherited["initiative"])
+
+        self.assertEqual(poke.atc, 0)
+        self.assertEqual(poke.defense, 0)
+        self.assertEqual(poke.initiative, 0)
+
+    def test_apply_negative_stats_guarded(self):
+        """Test that negative stats are guarded to 0."""
+        poke = MockPoke("test", types=["normal"], atc=5, defense=5, initiative=5)
+        inherited = {"atc": -5, "defense": -10, "initiative": -1}
+
+        poke.atc = max(0, inherited["atc"])
+        poke.defense = max(0, inherited["defense"])
+        poke.initiative = max(0, inherited["initiative"])
+
+        self.assertEqual(poke.atc, 0)
+        self.assertEqual(poke.defense, 0)
+        self.assertEqual(poke.initiative, 0)
+
+    def test_apply_partial_stats(self):
+        """Test applying only some inherited stats."""
+        poke = MockPoke("test", types=["normal"], atc=5, defense=5, initiative=5)
+        inherited = {"atc": 10}  # Only atc provided
+
+        if "atc" in inherited:
+            poke.atc = max(0, inherited["atc"])
+        if "defense" in inherited:
+            poke.defense = max(0, inherited["defense"])
+        if "initiative" in inherited:
+            poke.initiative = max(0, inherited["initiative"])
+
+        self.assertEqual(poke.atc, 10)
+        self.assertEqual(poke.defense, 5)  # Unchanged
+        self.assertEqual(poke.initiative, 5)  # Unchanged
 
 
 if __name__ == "__main__":
