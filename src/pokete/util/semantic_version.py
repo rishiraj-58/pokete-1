@@ -26,8 +26,9 @@ class SemanticVersion:
         return cls(major, minor, patch, suffix)
 
     def __str__(self) -> str:
-        suffix_str = ("-" + self.suffix) if self.suffix is not None else ""
-        return f"{self.major}.{self.minor}.{self.patch}{suffix_str}"
+        return f"{self.major}.{self.minor}.{self.patch}{
+            ("-"+self.suffix) if self.suffix is not None else ""
+        }"
 
     def __eq__(self, value) -> bool:
         other: "SemanticVersion" = value
