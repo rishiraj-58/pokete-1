@@ -93,14 +93,7 @@ def read_save():
             "poke": None,
         },
         "breeding": {
-            "parent1": None,
-            "parent2": None,
-            "parent1_index": None,
-            "parent2_index": None,
-            "start_time": 0,
-            "egg_ready": False,
-            "egg": None,
-            "history": [],
+            "breeding_pair": None,
         },
         "time": 0,
     }
@@ -120,4 +113,14 @@ def read_save():
         with open(ancient_save_file, "r") as _file:
             exec(_file.read(), {"session_info": _si}, l_dict)
         _si = json.loads(json.dumps(l_dict["session_info"]))
+
+    # Ensure breeding key exists for older saves
+    if "breeding" not in _si:
+        _si["breeding"] = {"breeding_pair": None}
+
     return _si
+
+
+def load_breeding_state(breeding_data: dict):
+    """Load breeding manager state from save data."""
+    breeding_manager.from_dict(breeding_data)
