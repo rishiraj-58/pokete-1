@@ -94,6 +94,7 @@ def read_save():
         },
         "breeding": {
             "breeding_pair": None,
+            "history": [],
         },
         "time": 0,
     }

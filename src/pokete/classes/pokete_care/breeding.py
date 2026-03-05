@@ -8,7 +8,7 @@ average of the parents' stats.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 
 # Base hatching time in in-game minutes (configurable)
 BASE_HATCH_TIME = 300  # 5 in-game hours
+
+# Maximum breeding history entries to keep
+MAX_BREEDING_HISTORY = 5
 
 
 @dataclass
@@ -54,6 +57,38 @@ class BreedingPairData:
         )
 
 
+@dataclass
+class BreedingHistoryEntry:
+    """Record of a completed breeding."""
+    parent1_name: str
+    parent2_name: str
+    offspring_name: str
+    offspring_identifier: str
+    completed_time: str  # ISO format timestamp
+    was_shiny: bool
+
+    def to_dict(self) -> dict:
+        return {
+            "parent1_name": self.parent1_name,
+            "parent2_name": self.parent2_name,
+            "offspring_name": self.offspring_name,
+            "offspring_identifier": self.offspring_identifier,
+            "completed_time": self.completed_time,
+            "was_shiny": self.was_shiny,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BreedingHistoryEntry":
+        return cls(
+            parent1_name=data["parent1_name"],
+            parent2_name=data["parent2_name"],
+            offspring_name=data["offspring_name"],
+            offspring_identifier=data["offspring_identifier"],
+            completed_time=data["completed_time"],
+            was_shiny=data["was_shiny"],
+        )
+
+
 class BreedingManager:
     """Manages breeding pairs in the Pokete Care facility.
 
@@ -63,6 +98,7 @@ class BreedingManager:
 
     def __init__(self):
         self._breeding_pair: BreedingPairData | None = None
+        self._history: list[BreedingHistoryEntry] = []
 
     @property
     def has_breeding_pair(self) -> bool:
@@ -71,6 +107,11 @@ class BreedingManager:
     @property
     def breeding_pair(self) -> BreedingPairData | None:
         return self._breeding_pair
+
+    @property
+    def history(self) -> list[BreedingHistoryEntry]:
+        """Get the breeding history (most recent first)."""
+        return list(reversed(self._history))
 
     def are_compatible(self, poke1: "Poke", poke2: "Poke") -> bool:
         """Check if two Poketes can breed (share at least one type)."""
@@ -142,13 +183,30 @@ class BreedingManager:
         weight2 = 1.0 - weight1
         return int(stat1 * weight1 + stat2 * weight2)
 
+    def _compute_shiny_chance(self, poke1: "Poke", poke2: "Poke") -> int:
+        """Compute shiny chance denominator based on parent shininess.
+
+        Base chance: 1/500
+        One shiny parent: 1/250 (halved)
+        Both shiny parents: 1/125 (halved again)
+        """
+        base_chance = 500
+        shiny_count = sum([poke1.shiny, poke2.shiny])
+
+        if shiny_count == 1:
+            return base_chance // 2  # 250
+        elif shiny_count == 2:
+            return base_chance // 4  # 125
+        return base_chance
+
     def compute_offspring_stats(
         self, poke1: "Poke", poke2: "Poke", offspring_identifier: str
     ) -> dict:
         """Compute the offspring's inherited stats.
 
-        Stats are weighted averages of parents' stats with some randomness.
-        Returns a dict that can be used to create the offspring Poke.
+        Stats (atc, defense, initiative) are weighted averages of parents' 
+        base stats with some randomness. Returns a dict that can be used 
+        to create the offspring Poke.
         """
         # Random weight between 0.3 and 0.7 for variety
         weight = random.uniform(0.3, 0.7)
@@ -156,11 +214,20 @@ class BreedingManager:
         # The offspring starts at level 1 (xp = 0)
         base_xp = 0
 
-        # Determine if shiny (rare chance, slightly higher if parent is shiny)
-        shiny_chance = 500
-        if poke1.shiny or poke2.shiny:
-            shiny_chance = 250
-        is_shiny = random.randint(0, shiny_chance) == 0
+        # Compute weighted averages of parent stats
+        inherited_atc = self._compute_weighted_stat(
+            poke1.inf.atc, poke2.inf.atc, weight
+        )
+        inherited_defense = self._compute_weighted_stat(
+            poke1.inf.defense, poke2.inf.defense, weight
+        )
+        inherited_initiative = self._compute_weighted_stat(
+            poke1.inf.initiative, poke2.inf.initiative, weight
+        )
+
+        # Determine if shiny based on parent shininess
+        shiny_chance = self._compute_shiny_chance(poke1, poke2)
+        is_shiny = random.randint(0, shiny_chance - 1) == 0
 
         # Get base attacks for offspring species
         pokes = asset_service.get_base_assets().pokes
@@ -188,6 +255,12 @@ class BreedingManager:
                 "earned_xp": 0,
                 "caught_with": "breeding",
                 "run_away": 0,
+            },
+            # Inherited stats for post-creation application
+            "inherited_stats": {
+                "atc": inherited_atc,
+                "defense": inherited_defense,
+                "initiative": inherited_initiative,
             },
         }
 
@@ -243,6 +316,28 @@ class BreedingManager:
         if self._breeding_pair is not None:
             self._breeding_pair.notified = True
 
+    def _add_to_history(
+        self,
+        parent1_name: str,
+        parent2_name: str,
+        offspring_name: str,
+        offspring_identifier: str,
+        was_shiny: bool,
+    ):
+        """Add a breeding result to history."""
+        entry = BreedingHistoryEntry(
+            parent1_name=parent1_name,
+            parent2_name=parent2_name,
+            offspring_name=offspring_name,
+            offspring_identifier=offspring_identifier,
+            completed_time=datetime.now().isoformat(),
+            was_shiny=was_shiny,
+        )
+        self._history.append(entry)
+        # Keep only the last MAX_BREEDING_HISTORY entries
+        if len(self._history) > MAX_BREEDING_HISTORY:
+            self._history = self._history[-MAX_BREEDING_HISTORY:]
+
     def collect_egg(self, current_time: int) -> dict | None:
         """Collect the hatched egg and return offspring data.
 
@@ -263,6 +358,22 @@ class BreedingManager:
 
         offspring_data = self.compute_offspring_stats(
             parent1, parent2, self._breeding_pair.offspring_identifier
+        )
+
+        # Get offspring name for history
+        pokes = asset_service.get_base_assets().pokes
+        offspring_poke_data = pokes.get(offspring_data["name"])
+        offspring_name = (
+            offspring_poke_data.name if offspring_poke_data else offspring_data["name"]
+        )
+
+        # Add to history
+        self._add_to_history(
+            parent1_name=parent1.name,
+            parent2_name=parent2.name,
+            offspring_name=offspring_name,
+            offspring_identifier=offspring_data["name"],
+            was_shiny=offspring_data["shiny"],
         )
 
         self._breeding_pair = None
@@ -291,6 +402,7 @@ class BreedingManager:
                 if self._breeding_pair
                 else None
             ),
+            "history": [entry.to_dict() for entry in self._history],
         }
 
     def from_dict(self, data: dict):
@@ -300,6 +412,12 @@ class BreedingManager:
             self._breeding_pair = BreedingPairData.from_dict(pair_data)
         else:
             self._breeding_pair = None
+
+        # Restore history
+        history_data = data.get("history", [])
+        self._history = [
+            BreedingHistoryEntry.from_dict(entry) for entry in history_data
+        ]
 
 
 # Global breeding manager instance

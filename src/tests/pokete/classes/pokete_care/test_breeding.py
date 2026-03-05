@@ -52,13 +52,25 @@ class MockPoke:
         xp: int = 100,
         types: list[str] | None = None,
         shiny: bool = False,
+        atc: int = 5,
+        defense: int = 5,
+        initiative: int = 5,
     ):
         self.identifier = identifier
         self.xp = xp
-        self.inf = MockResourcePoke(name=identifier, types=types or ["normal"])
+        self.inf = MockResourcePoke(
+            name=identifier,
+            types=types or ["normal"],
+            atc=atc,
+            defense=defense,
+            initiative=initiative,
+        )
         self.shiny = shiny
         self.name = identifier
         self.hp = 20
+        self.atc = atc
+        self.defense = defense
+        self.initiative = initiative
         self.attacks = ["tackle"]
         self.effects = []
         self._nature_dict = {"nature": "normal", "grade": 1}
@@ -96,28 +108,34 @@ class MockAssetService:
     def __init__(self):
         self._pokes = {
             "steini": MockResourcePoke(
-                name="Steini", types=["stone", "normal"]
+                name="Steini", types=["stone", "normal"], atc=2, defense=4, initiative=5
             ),
             "mowcow": MockResourcePoke(
-                name="Mowcow", types=["normal"]
+                name="Mowcow", types=["normal"], atc=2, defense=3, initiative=2
             ),
             "vogli": MockResourcePoke(
                 name="Vogli",
                 types=["flying", "normal", "bird"],
                 evolve_poke="voglo",
                 evolve_lvl=20,
+                atc=6,
+                defense=1,
+                initiative=6,
             ),
             "voglo": MockResourcePoke(
                 name="Voglo",
                 types=["flying", "normal", "bird"],
                 evolve_poke="voglus",
                 evolve_lvl=35,
+                atc=7,
+                defense=1,
+                initiative=7,
             ),
             "wolfior": MockResourcePoke(
-                name="Wolfior", types=["fire", "normal"]
+                name="Wolfior", types=["fire", "normal"], atc=6, defense=3, initiative=4
             ),
             "karpi": MockResourcePoke(
-                name="Karpi", types=["water", "normal"]
+                name="Karpi", types=["water", "normal"], atc=0, defense=0, initiative=0
             ),
             "__fallback__": MockResourcePoke(
                 name="", types=["normal"]
@@ -137,14 +155,12 @@ class TestBreedingManager(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        # Patch asset_service before importing breeding module
         self.asset_patcher = patch(
             "pokete.classes.pokete_care.breeding.asset_service",
             MockAssetService()
         )
         self.mock_asset_service = self.asset_patcher.start()
 
-        # Now import the module under test
         from pokete.classes.pokete_care.breeding import BreedingManager
         self.manager = BreedingManager()
 
@@ -190,9 +206,8 @@ class TestBreedingManager(unittest.TestCase):
 
         hatch_time = self.manager.compute_hatch_time(poke1, poke2)
 
-        # Should be between reasonable bounds
         self.assertGreater(hatch_time, 0)
-        self.assertLessEqual(hatch_time, 300)  # BASE_HATCH_TIME
+        self.assertLessEqual(hatch_time, 300)
 
     def test_compute_hatch_time_more_shared_types_faster(self):
         """Test that more shared types result in faster hatching."""
@@ -212,7 +227,7 @@ class TestBreedingManager(unittest.TestCase):
         poke1_low = MockPoke("test1", xp=10, types=["normal"])
         poke2_low = MockPoke("test2", xp=10, types=["normal"])
 
-        poke1_high = MockPoke("test3", xp=2500, types=["normal"])  # lvl 50
+        poke1_high = MockPoke("test3", xp=2500, types=["normal"])
         poke2_high = MockPoke("test4", xp=2500, types=["normal"])
 
         time_low = self.manager.compute_hatch_time(poke1_low, poke2_low)
@@ -291,14 +306,11 @@ class TestBreedingManager(unittest.TestCase):
         self.manager.start_breeding(poke1, poke2, current_time=1000)
         hatch_time = self.manager.breeding_pair.hatch_time
 
-        # Not ready yet
         self.assertFalse(self.manager.should_notify(current_time=1000))
 
-        # Ready and not notified
         ready_time = 1000 + hatch_time
         self.assertTrue(self.manager.should_notify(current_time=ready_time))
 
-        # Mark notified
         self.manager.mark_notified()
         self.assertFalse(self.manager.should_notify(current_time=ready_time))
 
@@ -320,7 +332,6 @@ class TestBreedingManager(unittest.TestCase):
         self.manager.start_breeding(poke1, poke2, current_time=1000)
         hatch_time = self.manager.breeding_pair.hatch_time
 
-        # Patch Poke.from_dict for offspring creation
         with patch(
             "pokete.classes.pokete_care.breeding.Poke.from_dict",
             side_effect=lambda d: MockPoke(d["name"])
@@ -330,7 +341,7 @@ class TestBreedingManager(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIn("name", result)
         self.assertIn("xp", result)
-        self.assertEqual(result["xp"], 0)  # Offspring starts at level 1
+        self.assertEqual(result["xp"], 0)
         self.assertFalse(self.manager.has_breeding_pair)
 
     def test_cancel_breeding(self):
@@ -359,10 +370,8 @@ class TestBreedingManager(unittest.TestCase):
         self.manager.start_breeding(poke1, poke2, current_time=1000)
         original_data = self.manager.breeding_pair
 
-        # Serialize
         saved = self.manager.dict()
 
-        # Create new manager and restore
         from pokete.classes.pokete_care.breeding import BreedingManager
         new_manager = BreedingManager()
         new_manager.from_dict(saved)
@@ -387,6 +396,258 @@ class TestBreedingManager(unittest.TestCase):
         new_manager.from_dict(saved)
 
         self.assertFalse(new_manager.has_breeding_pair)
+
+
+class TestShinyChance(unittest.TestCase):
+    """Test cases for shiny chance computation."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.asset_patcher = patch(
+            "pokete.classes.pokete_care.breeding.asset_service",
+            MockAssetService()
+        )
+        self.asset_patcher.start()
+
+        from pokete.classes.pokete_care.breeding import BreedingManager
+        self.manager = BreedingManager()
+
+    def tearDown(self):
+        self.asset_patcher.stop()
+
+    def test_no_shiny_parents_base_chance(self):
+        """Test base shiny chance with no shiny parents (1/500)."""
+        poke1 = MockPoke("steini", shiny=False)
+        poke2 = MockPoke("mowcow", shiny=False)
+
+        chance = self.manager._compute_shiny_chance(poke1, poke2)
+        self.assertEqual(chance, 500)
+
+    def test_one_shiny_parent_halved_chance(self):
+        """Test halved shiny chance with one shiny parent (1/250)."""
+        poke1 = MockPoke("steini", shiny=True)
+        poke2 = MockPoke("mowcow", shiny=False)
+
+        chance = self.manager._compute_shiny_chance(poke1, poke2)
+        self.assertEqual(chance, 250)
+
+        # Test reverse order
+        poke3 = MockPoke("steini", shiny=False)
+        poke4 = MockPoke("mowcow", shiny=True)
+
+        chance2 = self.manager._compute_shiny_chance(poke3, poke4)
+        self.assertEqual(chance2, 250)
+
+    def test_both_shiny_parents_quarter_chance(self):
+        """Test quarter shiny chance with both shiny parents (1/125)."""
+        poke1 = MockPoke("steini", shiny=True)
+        poke2 = MockPoke("mowcow", shiny=True)
+
+        chance = self.manager._compute_shiny_chance(poke1, poke2)
+        self.assertEqual(chance, 125)
+
+
+class TestInheritedStats(unittest.TestCase):
+    """Test cases for inherited stats computation."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.asset_patcher = patch(
+            "pokete.classes.pokete_care.breeding.asset_service",
+            MockAssetService()
+        )
+        self.asset_patcher.start()
+
+        from pokete.classes.pokete_care.breeding import BreedingManager
+        self.manager = BreedingManager()
+
+    def tearDown(self):
+        self.asset_patcher.stop()
+
+    def test_offspring_has_inherited_stats(self):
+        """Test that offspring stats dict includes inherited_stats."""
+        poke1 = MockPoke("steini", types=["normal"], atc=10, defense=8, initiative=6)
+        poke2 = MockPoke("mowcow", types=["normal"], atc=4, defense=2, initiative=4)
+
+        stats = self.manager.compute_offspring_stats(poke1, poke2, "steini")
+
+        self.assertIn("inherited_stats", stats)
+        self.assertIn("atc", stats["inherited_stats"])
+        self.assertIn("defense", stats["inherited_stats"])
+        self.assertIn("initiative", stats["inherited_stats"])
+
+    def test_inherited_stats_are_weighted_average(self):
+        """Test that inherited stats are between parent values."""
+        poke1 = MockPoke("steini", types=["normal"], atc=10, defense=10, initiative=10)
+        poke2 = MockPoke("mowcow", types=["normal"], atc=0, defense=0, initiative=0)
+
+        # Run multiple times to account for random weight
+        for _ in range(10):
+            stats = self.manager.compute_offspring_stats(poke1, poke2, "steini")
+            inherited = stats["inherited_stats"]
+
+            # Values should be between 0 and 10 (weighted average)
+            self.assertGreaterEqual(inherited["atc"], 0)
+            self.assertLessEqual(inherited["atc"], 10)
+            self.assertGreaterEqual(inherited["defense"], 0)
+            self.assertLessEqual(inherited["defense"], 10)
+            self.assertGreaterEqual(inherited["initiative"], 0)
+            self.assertLessEqual(inherited["initiative"], 10)
+
+    def test_offspring_starts_at_level_1(self):
+        """Test that offspring starts at level 1 (xp=0)."""
+        poke1 = MockPoke("steini", xp=1000, types=["normal"])
+        poke2 = MockPoke("mowcow", xp=2000, types=["normal"])
+
+        stats = self.manager.compute_offspring_stats(poke1, poke2, "steini")
+
+        self.assertEqual(stats["xp"], 0)
+
+    def test_offspring_has_required_fields(self):
+        """Test that offspring stats have all required fields."""
+        poke1 = MockPoke("steini", types=["normal"])
+        poke2 = MockPoke("mowcow", types=["normal"])
+
+        stats = self.manager.compute_offspring_stats(poke1, poke2, "steini")
+
+        required_fields = ["name", "xp", "hp", "attacks", "shiny", "stats", "inherited_stats"]
+        for field in required_fields:
+            self.assertIn(field, stats)
+
+    def test_offspring_stats_has_breeding_origin(self):
+        """Test that offspring stats indicate breeding as origin."""
+        poke1 = MockPoke("steini", types=["normal"])
+        poke2 = MockPoke("mowcow", types=["normal"])
+
+        stats = self.manager.compute_offspring_stats(poke1, poke2, "steini")
+
+        self.assertEqual(stats["stats"]["caught_with"], "breeding")
+
+
+class TestBreedingHistory(unittest.TestCase):
+    """Test cases for breeding history."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.asset_patcher = patch(
+            "pokete.classes.pokete_care.breeding.asset_service",
+            MockAssetService()
+        )
+        self.asset_patcher.start()
+
+        from pokete.classes.pokete_care.breeding import BreedingManager
+        self.manager = BreedingManager()
+
+    def tearDown(self):
+        self.asset_patcher.stop()
+
+    def test_history_empty_initially(self):
+        """Test that history starts empty."""
+        self.assertEqual(len(self.manager.history), 0)
+
+    def test_history_added_after_collection(self):
+        """Test that collecting egg adds to history."""
+        poke1 = MockPoke("steini", types=["normal"])
+        poke2 = MockPoke("mowcow", types=["normal"])
+
+        self.manager.start_breeding(poke1, poke2, current_time=1000)
+        hatch_time = self.manager.breeding_pair.hatch_time
+
+        with patch(
+            "pokete.classes.pokete_care.breeding.Poke.from_dict",
+            side_effect=lambda d: MockPoke(d["name"])
+        ):
+            self.manager.collect_egg(current_time=1000 + hatch_time)
+
+        self.assertEqual(len(self.manager.history), 1)
+        entry = self.manager.history[0]
+        self.assertEqual(entry.parent1_name, "steini")
+        self.assertEqual(entry.parent2_name, "mowcow")
+
+    def test_history_max_entries(self):
+        """Test that history keeps only last 5 entries."""
+        from pokete.classes.pokete_care.breeding import MAX_BREEDING_HISTORY
+
+        for i in range(MAX_BREEDING_HISTORY + 3):
+            poke1 = MockPoke(f"poke_{i}_1", types=["normal"])
+            poke2 = MockPoke(f"poke_{i}_2", types=["normal"])
+
+            self.manager.start_breeding(poke1, poke2, current_time=1000 + i * 1000)
+            hatch_time = self.manager.breeding_pair.hatch_time
+
+            with patch(
+                "pokete.classes.pokete_care.breeding.Poke.from_dict",
+                side_effect=lambda d: MockPoke(d["name"])
+            ):
+                self.manager.collect_egg(current_time=1000 + i * 1000 + hatch_time)
+
+        self.assertEqual(len(self.manager.history), MAX_BREEDING_HISTORY)
+
+    def test_history_most_recent_first(self):
+        """Test that history returns most recent first."""
+        for i in range(3):
+            poke1 = MockPoke(f"poke_{i}_1", types=["normal"])
+            poke2 = MockPoke(f"poke_{i}_2", types=["normal"])
+
+            self.manager.start_breeding(poke1, poke2, current_time=1000 + i * 1000)
+            hatch_time = self.manager.breeding_pair.hatch_time
+
+            with patch(
+                "pokete.classes.pokete_care.breeding.Poke.from_dict",
+                side_effect=lambda d: MockPoke(d["name"])
+            ):
+                self.manager.collect_egg(current_time=1000 + i * 1000 + hatch_time)
+
+        # Most recent should be first
+        self.assertEqual(self.manager.history[0].parent1_name, "poke_2_1")
+        self.assertEqual(self.manager.history[2].parent1_name, "poke_0_1")
+
+    def test_history_serialization(self):
+        """Test that history is serialized and restored."""
+        poke1 = MockPoke("steini", types=["normal"])
+        poke2 = MockPoke("mowcow", types=["normal"])
+
+        self.manager.start_breeding(poke1, poke2, current_time=1000)
+        hatch_time = self.manager.breeding_pair.hatch_time
+
+        with patch(
+            "pokete.classes.pokete_care.breeding.Poke.from_dict",
+            side_effect=lambda d: MockPoke(d["name"])
+        ):
+            self.manager.collect_egg(current_time=1000 + hatch_time)
+
+        # Serialize
+        saved = self.manager.dict()
+        self.assertIn("history", saved)
+        self.assertEqual(len(saved["history"]), 1)
+
+        # Restore
+        from pokete.classes.pokete_care.breeding import BreedingManager
+        new_manager = BreedingManager()
+        new_manager.from_dict(saved)
+
+        self.assertEqual(len(new_manager.history), 1)
+        self.assertEqual(new_manager.history[0].parent1_name, "steini")
+
+    def test_history_records_shiny(self):
+        """Test that history records shiny offspring."""
+        poke1 = MockPoke("steini", types=["normal"])
+        poke2 = MockPoke("mowcow", types=["normal"])
+
+        self.manager.start_breeding(poke1, poke2, current_time=1000)
+        hatch_time = self.manager.breeding_pair.hatch_time
+
+        # Force shiny by patching random
+        with patch(
+            "pokete.classes.pokete_care.breeding.Poke.from_dict",
+            side_effect=lambda d: MockPoke(d["name"])
+        ), patch(
+            "pokete.classes.pokete_care.breeding.random.randint",
+            return_value=0  # Makes shiny check pass
+        ):
+            self.manager.collect_egg(current_time=1000 + hatch_time)
+
+        self.assertTrue(self.manager.history[0].was_shiny)
 
 
 class TestBreedingPairData(unittest.TestCase):
@@ -427,8 +688,8 @@ class TestBreedingPairData(unittest.TestCase):
         self.assertEqual(restored.notified, original.notified)
 
 
-class TestComputeOffspringStats(unittest.TestCase):
-    """Test cases for offspring stats computation."""
+class TestBreedingHistoryEntry(unittest.TestCase):
+    """Test cases for BreedingHistoryEntry."""
 
     def setUp(self):
         """Set up test fixtures."""
@@ -438,40 +699,31 @@ class TestComputeOffspringStats(unittest.TestCase):
         )
         self.asset_patcher.start()
 
-        from pokete.classes.pokete_care.breeding import BreedingManager
-        self.manager = BreedingManager()
-
     def tearDown(self):
         self.asset_patcher.stop()
 
-    def test_offspring_starts_at_level_1(self):
-        """Test that offspring starts at level 1 (xp=0)."""
-        poke1 = MockPoke("steini", xp=1000, types=["normal"])
-        poke2 = MockPoke("mowcow", xp=2000, types=["normal"])
+    def test_to_dict_and_from_dict(self):
+        """Test BreedingHistoryEntry serialization."""
+        from pokete.classes.pokete_care.breeding import BreedingHistoryEntry
 
-        stats = self.manager.compute_offspring_stats(poke1, poke2, "steini")
+        original = BreedingHistoryEntry(
+            parent1_name="Steini",
+            parent2_name="Mowcow",
+            offspring_name="Steini",
+            offspring_identifier="steini",
+            completed_time="2024-01-01T12:00:00",
+            was_shiny=True,
+        )
 
-        self.assertEqual(stats["xp"], 0)
+        data = original.to_dict()
+        restored = BreedingHistoryEntry.from_dict(data)
 
-    def test_offspring_has_required_fields(self):
-        """Test that offspring stats have all required fields."""
-        poke1 = MockPoke("steini", types=["normal"])
-        poke2 = MockPoke("mowcow", types=["normal"])
-
-        stats = self.manager.compute_offspring_stats(poke1, poke2, "steini")
-
-        required_fields = ["name", "xp", "hp", "attacks", "shiny", "stats"]
-        for field in required_fields:
-            self.assertIn(field, stats)
-
-    def test_offspring_stats_has_breeding_origin(self):
-        """Test that offspring stats indicate breeding as origin."""
-        poke1 = MockPoke("steini", types=["normal"])
-        poke2 = MockPoke("mowcow", types=["normal"])
-
-        stats = self.manager.compute_offspring_stats(poke1, poke2, "steini")
-
-        self.assertEqual(stats["stats"]["caught_with"], "breeding")
+        self.assertEqual(restored.parent1_name, original.parent1_name)
+        self.assertEqual(restored.parent2_name, original.parent2_name)
+        self.assertEqual(restored.offspring_name, original.offspring_name)
+        self.assertEqual(restored.offspring_identifier, original.offspring_identifier)
+        self.assertEqual(restored.completed_time, original.completed_time)
+        self.assertEqual(restored.was_shiny, original.was_shiny)
 
 
 class TestFindBaseForm(unittest.TestCase):
@@ -493,7 +745,6 @@ class TestFindBaseForm(unittest.TestCase):
 
     def test_find_base_form_single_evolution(self):
         """Test finding base form for single evolution chain."""
-        # voglo evolves from vogli
         base = self.manager._find_base_form("voglo")
         self.assertEqual(base, "vogli")
 
@@ -504,9 +755,56 @@ class TestFindBaseForm(unittest.TestCase):
 
     def test_find_base_form_multi_stage(self):
         """Test finding base form for multi-stage evolution."""
-        # voglus -> voglo -> vogli
         base = self.manager._find_base_form("voglus")
         self.assertEqual(base, "vogli")
+
+
+class TestApplyInheritedStats(unittest.TestCase):
+    """Test cases for apply_inherited_stats function."""
+
+    def test_apply_inherited_stats_positive_bonus(self):
+        """Test applying positive stat bonuses."""
+        from pokete.classes.pokete_care.npc_action import apply_inherited_stats
+
+        poke = MockPoke("steini", atc=5, defense=5, initiative=5)
+        poke.inf.atc = 5
+        poke.inf.defense = 5
+        poke.inf.initiative = 5
+
+        inherited = {"atc": 8, "defense": 7, "initiative": 6}
+        apply_inherited_stats(poke, inherited)
+
+        self.assertEqual(poke.atc, 8)  # 5 + (8-5) = 8
+        self.assertEqual(poke.defense, 7)  # 5 + (7-5) = 7
+        self.assertEqual(poke.initiative, 6)  # 5 + (6-5) = 6
+
+    def test_apply_inherited_stats_negative_bonus(self):
+        """Test applying negative stat bonuses (doesn't go below 0)."""
+        from pokete.classes.pokete_care.npc_action import apply_inherited_stats
+
+        poke = MockPoke("steini", atc=5, defense=5, initiative=5)
+        poke.inf.atc = 10
+        poke.inf.defense = 10
+        poke.inf.initiative = 10
+
+        inherited = {"atc": 2, "defense": 3, "initiative": 1}
+        apply_inherited_stats(poke, inherited)
+
+        # Bonuses are negative: atc = 5 + (2-10) = -3 -> 0
+        self.assertEqual(poke.atc, 0)
+        self.assertEqual(poke.defense, 0)
+        self.assertEqual(poke.initiative, 0)
+
+    def test_apply_inherited_stats_empty_dict(self):
+        """Test that empty inherited_stats doesn't change poke."""
+        from pokete.classes.pokete_care.npc_action import apply_inherited_stats
+
+        poke = MockPoke("steini", atc=5, defense=5, initiative=5)
+        original_atc = poke.atc
+
+        apply_inherited_stats(poke, {})
+
+        self.assertEqual(poke.atc, original_atc)
 
 
 if __name__ == "__main__":

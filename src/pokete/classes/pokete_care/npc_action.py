@@ -49,6 +49,33 @@ gained {add_xp}xp and reached level {self.care.poke.lvl()}!"])
         npc.text(["See you!"])
 
 
+def apply_inherited_stats(poke: Poke, inherited_stats: dict) -> None:
+    """Apply inherited stats from breeding to a Poke.
+
+    This modifies the poke's base stats (atc, defense, initiative) based on
+    the weighted average computed from the parents.
+    """
+    if not inherited_stats:
+        return
+
+    # Apply inherited stats as bonuses/penalties relative to base
+    # The inherited values are absolute, so we calculate the difference
+    # from the species base and apply it
+    base_atc = poke.inf.atc
+    base_defense = poke.inf.defense
+    base_initiative = poke.inf.initiative
+
+    # Calculate bonus/penalty from inherited stats
+    atc_bonus = inherited_stats.get("atc", base_atc) - base_atc
+    defense_bonus = inherited_stats.get("defense", base_defense) - base_defense
+    initiative_bonus = inherited_stats.get("initiative", base_initiative) - base_initiative
+
+    # Apply bonuses to current stats
+    poke.atc = max(0, poke.atc + atc_bonus)
+    poke.defense = max(0, poke.defense + defense_bonus)
+    poke.initiative = max(0, poke.initiative + initiative_bonus)
+
+
 class BreedingNPCAction(NPCAction):
     """NPC action for the breeding facility."""
 
@@ -74,11 +101,21 @@ class BreedingNPCAction(NPCAction):
             if ui.ask_bool("Would you like to collect your new Pokete?"):
                 offspring_data = self.breeding.collect_egg(current_time)
                 if offspring_data:
+                    # Extract inherited stats before creating poke
+                    inherited_stats = offspring_data.pop("inherited_stats", {})
+
                     new_poke = Poke.from_dict(offspring_data)
+
+                    # Apply inherited stats from parents
+                    apply_inherited_stats(new_poke, inherited_stats)
+
                     npc.ctx.figure.add_poke(new_poke)
                     npc.ctx.figure.caught_pokes.append(new_poke.identifier)
+
+                    shiny_msg = " (Shiny!)" if new_poke.shiny else ""
                     npc.text([
-                        f"Congratulations! A {new_poke.name} has hatched!",
+                        f"Congratulations! A {new_poke.name}{shiny_msg} has hatched!",
+                        "It inherited stats from its parents.",
                         "Take good care of it!"
                     ])
         else:
@@ -107,6 +144,10 @@ class BreedingNPCAction(NPCAction):
             "Here, two compatible Poketes can produce an egg.",
             "Poketes are compatible if they share at least one type."
         ])
+
+        # Offer to view history or start breeding
+        if ui.ask_bool("Would you like to view breeding history?"):
+            self._show_breeding_history(npc)
 
         if not ui.ask_bool("Would you like to start breeding?"):
             return
@@ -140,16 +181,23 @@ class BreedingNPCAction(NPCAction):
             ])
             return
 
-        # Show compatibility info
+        # Show compatibility info including shiny bonus
         shared_types = self.breeding.get_shared_types(poke1, poke2)
         hatch_time = self.breeding.compute_hatch_time(poke1, poke2)
         hours = hatch_time // 60
         minutes = hatch_time % 60
 
+        shiny_info = []
+        if poke1.shiny and poke2.shiny:
+            shiny_info = ["Both parents are shiny! Offspring has 1/125 shiny chance!"]
+        elif poke1.shiny or poke2.shiny:
+            shiny_info = ["One parent is shiny! Offspring has 1/250 shiny chance!"]
+
         npc.text([
             f"{poke1.name} and {poke2.name} are compatible!",
             f"Shared types: {', '.join(shared_types)}",
-            f"Estimated hatching time: {hours}h {minutes}m"
+            f"Estimated hatching time: {hours}h {minutes}m",
+            *shiny_info
         ])
 
         if ui.ask_bool("Do you want to proceed with breeding?"):
@@ -166,3 +214,18 @@ class BreedingNPCAction(NPCAction):
                 ])
             else:
                 npc.text(["Sorry, something went wrong. Please try again."])
+
+    def _show_breeding_history(self, npc: NPCInterface):
+        """Display breeding history to the player."""
+        history = self.breeding.history
+        if not history:
+            npc.text(["No breeding history yet."])
+            return
+
+        npc.text([f"Your last {len(history)} breeding results:"])
+        for entry in history:
+            shiny_marker = " *SHINY*" if entry.was_shiny else ""
+            npc.text([
+                f"{entry.parent1_name} + {entry.parent2_name}",
+                f"  -> {entry.offspring_name}{shiny_marker}"
+            ])
