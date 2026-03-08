@@ -1,1 +1,1 @@
-from .util import *
+# Pokete tests package

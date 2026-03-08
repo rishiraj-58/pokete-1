@@ -1,186 +1,135 @@
-"""Tests for NPCTrader"""
+"""Tests for NPC Trader"""
 
-import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from pokete.classes.trading.npc_trader import NPCTrader, NPCTraderManager
-from pokete.classes.trading.trade_manager import TradeManager
-from pokete.classes.trading.trade_offer import TradeRequirements, TradeStatus
+from pokete.classes.trading.npc_trader import NPCTrader, NPCInventoryItem
+from pokete.classes.trading.models import TradeOffer, TradeRequirements, TradeStatus
+
+
+class TestNPCInventoryItem(unittest.TestCase):
+    def test_create_inventory_item(self):
+        item = NPCInventoryItem(
+            identifier="steini",
+            name="Steini",
+            level=15,
+            types=["stone", "normal"],
+        )
+        self.assertEqual(item.identifier, "steini")
+        self.assertEqual(item.name, "Steini")
+        self.assertEqual(item.level, 15)
+        self.assertEqual(item.types, ["stone", "normal"])
 
 
 class TestNPCTrader(unittest.TestCase):
-
     def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-        self.save_path = Path(self.temp_dir) / "test_trades.json"
-        self.manager = TradeManager(save_path=self.save_path)
-
-        self.npc_inventory = [
-            {"name": "wolfior", "xp": 100, "types": ["fire", "normal"]},
-            {"name": "karpi", "xp": 50, "types": ["water", "normal"]},
-            {"name": "steini", "xp": 80, "types": ["stone", "normal"]},
+        self.inventory = [
+            NPCInventoryItem("steini", "Steini", 15, ["stone", "normal"]),
+            NPCInventoryItem("wolfior", "Wolfior", 20, ["fire", "normal"]),
+            NPCInventoryItem("karpi", "Karpi", 5, ["water", "normal"]),
         ]
-        self.trader = NPCTrader("npc_1", self.manager, self.npc_inventory.copy())
+        self.trader = NPCTrader("npc_trader_1", self.inventory)
 
-    def tearDown(self):
-        self.trader.stop_periodic_checks()
-        self.manager.stop_expiry_timer()
-        import shutil
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_find_matching_poke_fire(self):
-        """Test finding a matching fire pokete"""
-        requirements = TradeRequirements(required_types=["fire"])
-        offer = self.manager.create_offer(
-            "player1",
-            {"name": "test", "xp": 100},
-            requirements,
-        )
-        match = self.trader.find_matching_poke(offer)
+    def test_find_matching_pokete_by_type(self):
+        requirements = TradeRequirements(types=["fire"])
+        match = self.trader.find_matching_pokete(requirements)
         self.assertIsNotNone(match)
-        self.assertEqual(match["name"], "wolfior")
+        self.assertEqual(match.identifier, "wolfior")
 
-    def test_find_matching_poke_water(self):
-        """Test finding a matching water pokete"""
-        requirements = TradeRequirements(required_types=["water"])
-        offer = self.manager.create_offer(
-            "player1",
-            {"name": "test", "xp": 100},
-            requirements,
-        )
-        match = self.trader.find_matching_poke(offer)
+    def test_find_matching_pokete_by_level(self):
+        requirements = TradeRequirements(min_level=10, max_level=18)
+        match = self.trader.find_matching_pokete(requirements)
         self.assertIsNotNone(match)
-        self.assertEqual(match["name"], "karpi")
+        self.assertEqual(match.identifier, "steini")
 
-    def test_find_matching_poke_no_match(self):
-        """Test when no match exists"""
-        requirements = TradeRequirements(required_types=["electro"])
-        offer = self.manager.create_offer(
-            "player1",
-            {"name": "test", "xp": 100},
-            requirements,
-        )
-        match = self.trader.find_matching_poke(offer)
+    def test_find_matching_pokete_no_match(self):
+        requirements = TradeRequirements(types=["ice"])
+        match = self.trader.find_matching_pokete(requirements)
         self.assertIsNone(match)
 
-    def test_find_matching_poke_level_requirement(self):
-        """Test level requirement matching"""
-        requirements = TradeRequirements(min_level=10)
-        offer = self.manager.create_offer(
-            "player1",
-            {"name": "test", "xp": 100},
-            requirements,
-        )
-        match = self.trader.find_matching_poke(offer)
+    def test_find_matching_pokete_specific(self):
+        requirements = TradeRequirements(specific_pokete="karpi")
+        match = self.trader.find_matching_pokete(requirements)
         self.assertIsNotNone(match)
-        self.assertEqual(match["name"], "wolfior")  # xp=100 -> level 10
+        self.assertEqual(match.identifier, "karpi")
 
-    def test_check_and_make_offers(self):
-        """Test making counter offers"""
-        requirements = TradeRequirements(required_types=["fire"])
-        offer = self.manager.create_offer(
-            "player1",
-            {"name": "test", "xp": 100},
-            requirements,
+    def test_evaluate_offer_pending(self):
+        offer = TradeOffer(
+            offered_pokete_identifier="mowcow",
+            offered_pokete_name="Mowcow",
+            offered_pokete_level=10,
+            requirements=TradeRequirements(types=["fire"]),
+            owner_id="player1",
+            status=TradeStatus.PENDING,
+        )
+        self.assertTrue(self.trader.evaluate_offer(offer))
+
+    def test_evaluate_offer_not_pending(self):
+        offer = TradeOffer(
+            offered_pokete_identifier="mowcow",
+            offered_pokete_name="Mowcow",
+            offered_pokete_level=10,
+            requirements=TradeRequirements(types=["fire"]),
+            owner_id="player1",
+            status=TradeStatus.MATCHED,
+        )
+        self.assertFalse(self.trader.evaluate_offer(offer))
+
+    def test_evaluate_offer_no_matching_pokete(self):
+        offer = TradeOffer(
+            offered_pokete_identifier="mowcow",
+            offered_pokete_name="Mowcow",
+            offered_pokete_level=10,
+            requirements=TradeRequirements(types=["ice"]),
+            owner_id="player1",
+            status=TradeStatus.PENDING,
+        )
+        self.assertFalse(self.trader.evaluate_offer(offer))
+
+    def test_generate_counter_offer_success(self):
+        offer = TradeOffer(
+            offered_pokete_identifier="mowcow",
+            offered_pokete_name="Mowcow",
+            offered_pokete_level=10,
+            requirements=TradeRequirements(types=["stone"]),
+            owner_id="player1",
+        )
+        counter = self.trader.generate_counter_offer(offer)
+        self.assertIsNotNone(counter)
+        self.assertEqual(counter.identifier, "steini")
+
+    def test_generate_counter_offer_no_match(self):
+        offer = TradeOffer(
+            offered_pokete_identifier="mowcow",
+            offered_pokete_name="Mowcow",
+            offered_pokete_level=10,
+            requirements=TradeRequirements(types=["ice"]),
+            owner_id="player1",
+        )
+        counter = self.trader.generate_counter_offer(offer)
+        self.assertIsNone(counter)
+
+    def test_remove_from_inventory_success(self):
+        self.assertEqual(len(self.trader.inventory), 3)
+        result = self.trader.remove_from_inventory("steini")
+        self.assertTrue(result)
+        self.assertEqual(len(self.trader.inventory), 2)
+        self.assertIsNone(
+            next((p for p in self.trader.inventory if p.identifier == "steini"), None)
         )
 
-        self.trader.check_and_make_offers()
-
-        self.assertEqual(offer.status, TradeStatus.MATCHED)
-        self.assertEqual(offer.counter_offer_owner_id, "npc_1")
-
-    def test_check_and_make_offers_removes_from_inventory(self):
-        """Test that matched pokete is removed from inventory"""
-        requirements = TradeRequirements(required_types=["fire"])
-        self.manager.create_offer(
-            "player1",
-            {"name": "test", "xp": 100},
-            requirements,
-        )
-
-        initial_count = len(self.trader.inventory)
-        self.trader.check_and_make_offers()
-
-        self.assertEqual(len(self.trader.inventory), initial_count - 1)
-
-    def test_check_and_make_offers_skips_own_offers(self):
-        """Test that NPC doesn't respond to its own offers"""
-        requirements = TradeRequirements(required_types=["fire"])
-        offer = self.manager.create_offer(
-            "npc_1",  # Same as NPC id
-            {"name": "test", "xp": 100},
-            requirements,
-        )
-
-        self.trader.check_and_make_offers()
-
-        self.assertEqual(offer.status, TradeStatus.PENDING)
-
-    def test_update_inventory(self):
-        """Test updating NPC inventory"""
-        new_inventory = [
-            {"name": "lindemon", "xp": 200, "types": ["fire", "flying"]},
-        ]
-        self.trader.update_inventory(new_inventory)
-        self.assertEqual(self.trader.inventory, new_inventory)
+    def test_remove_from_inventory_not_found(self):
+        result = self.trader.remove_from_inventory("unknown")
+        self.assertFalse(result)
+        self.assertEqual(len(self.trader.inventory), 3)
 
 
-class TestNPCTraderManager(unittest.TestCase):
-
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-        self.save_path = Path(self.temp_dir) / "test_trades.json"
-        self.trade_manager = TradeManager(save_path=self.save_path)
-        self.trader_manager = NPCTraderManager(self.trade_manager)
-
-    def tearDown(self):
-        self.trader_manager.stop_all()
-        self.trade_manager.stop_expiry_timer()
-        import shutil
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_register_trader(self):
-        """Test registering a new trader"""
-        inventory = [{"name": "wolfior", "xp": 100, "types": ["fire"]}]
-        trader = self.trader_manager.register_trader("npc_1", inventory)
-
-        self.assertIsNotNone(trader)
-        self.assertEqual(trader.npc_id, "npc_1")
-
-    def test_get_trader(self):
-        """Test getting a registered trader"""
-        inventory = [{"name": "wolfior", "xp": 100, "types": ["fire"]}]
-        self.trader_manager.register_trader("npc_1", inventory)
-
-        trader = self.trader_manager.get_trader("npc_1")
-        self.assertIsNotNone(trader)
-        self.assertEqual(trader.npc_id, "npc_1")
-
-    def test_get_trader_not_found(self):
-        """Test getting non-existent trader"""
-        trader = self.trader_manager.get_trader("nonexistent")
-        self.assertIsNone(trader)
-
-    def test_trigger_check_all(self):
-        """Test triggering checks on all traders"""
-        inventory1 = [{"name": "wolfior", "xp": 100, "types": ["fire"]}]
-        inventory2 = [{"name": "karpi", "xp": 50, "types": ["water"]}]
-
-        self.trader_manager.register_trader("npc_1", inventory1)
-        self.trader_manager.register_trader("npc_2", inventory2)
-
-        requirements = TradeRequirements(required_types=["fire"])
-        offer = self.trade_manager.create_offer(
-            "player1",
-            {"name": "test", "xp": 100},
-            requirements,
-        )
-
-        self.trader_manager.trigger_check_all()
-
-        self.assertEqual(offer.status, TradeStatus.MATCHED)
+class TestNPCTraderWithEmptyInventory(unittest.TestCase):
+    def test_empty_inventory(self):
+        trader = NPCTrader("empty_trader", [])
+        requirements = TradeRequirements()
+        match = trader.find_matching_pokete(requirements)
+        self.assertIsNone(match)
 
 
 if __name__ == "__main__":
