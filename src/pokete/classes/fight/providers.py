@@ -41,6 +41,8 @@ class Provider(ABC):
                 poke.effects = []
                 poke.miss_chance = poke.full_miss_chance
                 poke.text_hp.rechar(f"HP:{poke.hp}")
+                # Update mood on heal
+                poke.mood.on_heal()
                 poke.set_vars()
                 poke.hp_bar.make(poke.hp)
             if poke.player:

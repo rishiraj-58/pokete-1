@@ -166,16 +166,22 @@ class Figure(se.Object, Inventory, ProtoFigure, Bank):
         if modeProvider.mode == Mode.MULTI:
             com_service.pos_update(self.map.name, self.x, self.y)
 
-    def add_poke(self, poke: Poke, idx=None, caught_with=None):
+    def add_poke(self, poke: Poke, idx=None, caught_with=None, traded=False):
         """Adds a Pokete to the players Poketes
         ARGS:
             poke: Poke object beeing added
             idx: Index of the Poke
-            caught_with: Name of ball which was used"""
+            caught_with: Name of ball which was used
+            traded: Whether the poke was obtained through trading"""
         poke.set_player(True)
         poke.set_poke_stats(
             Stats(poke.name, datetime.now(), caught_with=caught_with)
         )
+        # Update mood based on how the poke was obtained
+        if traded:
+            poke.mood.on_trade()
+        elif caught_with is not None:
+            poke.mood.on_catch(timer.time.time)
         self.caught_pokes.append(poke.identifier)
         if idx is None:
             id_list = [i.identifier for i in self.pokes]
@@ -304,7 +310,7 @@ Your partners mods: {', '.join(i + '-' + mod_info[i] for i in mod_info)}"""
         return
     figure.add_poke(Poke(decode_data["poke"]["name"],
                          decode_data["poke"]["xp"],
-                         decode_data["poke"]["hp"]), index)
+                         decode_data["poke"]["hp"]), index, traded=True)
     figure.pokes[index].set_ap(decode_data["poke"]["ap"])
     save(figure)  # to avoid duping
     ask_ok(ctx,

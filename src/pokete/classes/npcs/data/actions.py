@@ -56,7 +56,7 @@ class Playmap20Trader(NPCAction):
         if (index := ui.choose_poke()) is None:
             return
         poke = Poke("ostri", 500)
-        npc.ctx.figure.add_poke(poke, index)
+        npc.ctx.figure.add_poke(poke, index, traded=True)
         npc.set_used()
         ui.ask_ok(
             f"You received: {poke.name.capitalize()}"

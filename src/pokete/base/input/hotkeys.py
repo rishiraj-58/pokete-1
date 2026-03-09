@@ -38,6 +38,7 @@ class Action(Enum):
 
     NATURE_INFO = auto()
     STATS_INFO = auto()
+    MOOD_INFO = auto()
     ABILITIES_INFO = auto()
     CHOOSE_ATTACK = auto()
     CHOOSE_ITEM = auto()
@@ -133,7 +134,7 @@ hotkey_mappings: dict[str, ActionList] = {
             Action.ABILITIES_INFO,
         ]
     ),
-    "5": ActionList([Action.ACT_5, Action.POKEDEX]),
+    "5": ActionList([Action.ACT_5, Action.POKEDEX, Action.MOOD_INFO]),
     "6": ActionList([Action.ACT_6, Action.CLOCK]),
     "7": ActionList([Action.ACT_7]),
     "8": ActionList([Action.ACT_8]),

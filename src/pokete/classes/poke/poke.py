@@ -20,6 +20,7 @@ from ..health_bar import HealthBar
 from ..learnattack import LearnAttack
 from ..moves import Moves
 from ..types import types
+from .mood import PokeMood
 from .nature import PokeNature
 from .stats import Stats
 
@@ -46,11 +47,17 @@ class Poke:
         shiny=False,
         nature=None,
         stats=None,
+        mood=None,
     ):
         self.nature = (
             PokeNature.random()
             if nature is None
             else PokeNature.from_dict(nature)
+        )
+        self.mood = (
+            PokeMood()
+            if mood is None
+            else PokeMood.from_dict(mood)
         )
         self.inf: ResourcePoke = asset_service.get_base_assets().pokes[poke]
         self.moves = Moves(self)
@@ -168,20 +175,25 @@ can't have more than 4 attacks!"
         self.poke_stats = poke_stats
 
     def set_vars(self):
-        """Updates/sets some vars"""
+        """Updates/sets some vars, including mood modifiers"""
+        mood_effect = self.mood.effect
+        mood_modifiers = {
+            "atc": mood_effect.attack_modifier,
+            "defense": mood_effect.defense_modifier,
+            "initiative": mood_effect.initiative_modifier,
+        }
         for name in ["atc", "defense", "initiative"]:
-            setattr(
-                self,
-                name,
-                round(
-                    (
-                        self.lvl()
-                        + getattr(self.inf, name)
-                        + (2 if self.shiny else 0)
-                    )
-                    * self.nature.get_value(name)
-                ),
+            base_value = round(
+                (
+                    self.lvl()
+                    + getattr(self.inf, name)
+                    + (2 if self.shiny else 0)
+                )
+                * self.nature.get_value(name)
             )
+            setattr(self, name, round(base_value * mood_modifiers[name]))
+        # Apply mood modifier to miss_chance
+        self.miss_chance = self.full_miss_chance * mood_effect.miss_chance_modifier
         for atc in self.attack_obs:
             atc.set_ap(atc.max_ap)
 
@@ -198,6 +210,7 @@ can't have more than 4 attacks!"
             "shiny": self.shiny,
             "nature": self.nature.dict(),
             "stats": self.poke_stats.dict(),
+            "mood": self.mood.dict(),
         }
 
     def set_ap(self, aps):
@@ -245,6 +258,9 @@ can't have more than 4 attacks!"
         )
         new.set_poke_stats(self.poke_stats)
         new.poke_stats.set_evolved_date(datetime.now())
+        # Transfer and update mood on evolution
+        new.mood = self.mood
+        new.mood.on_evolution()
         return new
 
     def backup_hp(self):
@@ -267,6 +283,7 @@ can't have more than 4 attacks!"
             shiny=_dict.get("shiny", False),
             nature=_dict.get("nature"),
             stats=_dict.get("stats", None),
+            mood=_dict.get("mood", None),
         )
 
     @classmethod
@@ -286,10 +303,13 @@ can't have more than 4 attacks!"
         while len(obj.attacks) > 4:
             obj.attacks.pop(random.randint(0, len(obj.attacks) - 1))
 
-        return cls(
+        wild_poke = cls(
             poke,
             _xp,
             _attacks=obj.attacks,
             player=False,
             shiny=(random.randint(0, 500) == 0),
         )
+        # Wild poketes have random moods
+        wild_poke.mood = PokeMood.random()
+        return wild_poke

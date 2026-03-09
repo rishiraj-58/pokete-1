@@ -12,6 +12,7 @@ from pokete.base.single_event import single_event_periodic_event
 from pokete.base.tss import tss
 from pokete.classes.fight.items.item import RoundContinuation
 from pokete.classes.items.invitem import InvItem
+from pokete.classes.timer import time as game_time
 from pokete.release import SPEED_OF_TIME
 
 from ..attack import Attack
@@ -68,6 +69,10 @@ class Fight:
         index = self.initial_player_index()
         for prov in self.providers:
             i = prov.curr
+            # Update mood on battle start
+            if i.player:
+                i.mood.on_battle_start(game_time.time)
+                i.set_vars()  # Recompute stats with mood modifiers
             for j in i.effects:
                 j.readd()
         while True:
@@ -110,6 +115,9 @@ class Fight:
                                 self.fightmap.ran_away(player, enem)
                                 logging.info("[Fight] Ended, ran away")
                                 player.curr.poke_stats.set_run_away_battle()
+                                # Update mood on running away
+                                if player.curr.player:
+                                    player.curr.mood.on_run_away(game_time.time)
                                 audio.play(ctx.figure.map.song)
                                 return player
                     case Result.ITEM:
@@ -174,8 +182,10 @@ class Fight:
 
         if winner.curr.player:
             winner.curr.poke_stats.add_battle(True)
+            winner.curr.mood.on_battle_win(game_time.time)
         else:
             loser.curr.poke_stats.add_battle(False)
+            loser.curr.mood.on_battle_loss(game_time.time)
 
         self.fightmap.death_animation(loser)
         self.fightmap.clean_up(winner)

@@ -19,8 +19,10 @@ from pokete.base.tss import tss
 from pokete.base.ui import Overview
 from pokete.base.ui.elements import ChooseBox, StdFrame2
 from pokete.classes.single_events import TeleportationSingleEvent
+from pokete.classes.timer import time as game_time
 from pokete.util import liner
 
+from .poke.mood import MoodInfoBox
 from .poke.stats import StatsInfoBox
 
 
@@ -100,12 +102,16 @@ class Detail(Informer, Overview):
         self.world_actions_label = se.Text("Abilities:", state="float")
         self.type_label = se.Text("Type:", state="float")
         self.initiative_label = se.Text("Initiative:", state="float")
+        self.mood_display_label = se.Text("Mood:", state="float")
         self.exit_label = se.Text(f"{Action.DECK.mapping}: Exit", state="float")
         self.nature_label = se.Text(
             f"{Action.NATURE_INFO.mapping}: Nature", state="float"
         )
         self.stats_label = se.Text(
             f"{Action.STATS_INFO.mapping}: Statistics", state="float"
+        )
+        self.mood_label = se.Text(
+            f"{Action.MOOD_INFO.mapping}: Mood", state="float"
         )
         self.ability_label = se.Text(
             f"{Action.ABILITIES_INFO.mapping}: Use ability", state="float"
@@ -120,10 +126,12 @@ class Detail(Informer, Overview):
         self.world_actions_label.add(self.map, 24, 4)
         self.type_label.add(self.map, 36, 5)
         self.initiative_label.add(self.map, 49, 5)
+        self.mood_display_label.add(self.map, 62, 5)
         self.exit_label.add(self.map, 0, self.map.height - 1)
         self.nature_label.add(self.map, 9, self.map.height - 1)
         self.stats_label.add(self.map, 20, self.map.height - 1)
-        self.ability_label.add(self.map, 35, self.map.height - 1)
+        self.mood_label.add(self.map, 35, self.map.height - 1)
+        self.ability_label.add(self.map, 45, self.map.height - 1)
         self.line_sep1.add(self.map, 1, 6)
         self.line_sep2.add(self.map, 1, 11)
         self.frame.add(self.map, 0, 0)
@@ -138,6 +146,7 @@ class Detail(Informer, Overview):
         abb_added = self.ability_label.added
         self.ability_label.remove()
         self.stats_label.remove()
+        self.mood_label.remove()
         self.line_sep1.remove()
         self.line_sep2.remove()
         self.frame.remove()
@@ -164,8 +173,9 @@ class Detail(Informer, Overview):
         self.exit_label.add(self.map, 0, self.map.height - 1)
         self.nature_label.add(self.map, 9, self.map.height - 1)
         self.stats_label.add(self.map, 20, self.map.height - 1)
+        self.mood_label.add(self.map, 35, self.map.height - 1)
         if abb_added:
-            self.ability_label.add(self.map, 35, self.map.height - 1)
+            self.ability_label.add(self.map, 45, self.map.height - 1)
         self.poke.desc.add(self.map, self.poke.desc.x, self.poke.desc.y)
         self.add_attack_labels()
         self.line_middle.add(self.map, round(self.map.width / 2), 7)
@@ -231,6 +241,10 @@ class Detail(Informer, Overview):
             abb: Bool whether or not the ability option is overview=Nonshown"""
         self.poke = poke
         self.overview = ctx.overview
+        # Update mood based on time (e.g., if not used for a long time)
+        if self.poke.player:
+            self.poke.mood.update_on_time(game_time.time)
+            self.poke.set_vars()  # Recompute stats with updated mood
         ctx = Context(
             PeriodicEventManager([exception_propagating_periodic_event]),
             self.map,
@@ -244,7 +258,7 @@ class Detail(Informer, Overview):
             self.world_actions_label.rechar(
                 "Abilities:" + " ".join([i.name for i in abb_obs])
             )
-            self.ability_label.add(self.map, 35, self.map.height - 1)
+            self.ability_label.add(self.map, 45, self.map.height - 1)
         else:
             self.world_actions_label.rechar("")
             self.ability_label.remove()
@@ -253,26 +267,38 @@ class Detail(Informer, Overview):
 {(4 - len(str(self.poke.atc))) * ' '}Defense:{self.poke.defense}"
         )
         self.initiative_label.rechar(f"Initiative:{self.poke.initiative}")
+        # Display mood with color
+        mood_text = se.Text(
+            self.poke.mood.display_name,
+            esccode=self.poke.mood.color,
+            state="float"
+        )
+        self.mood_display_label.rechar(f"Mood:")
         for obj, _x, _y in zip(
             [self.poke.desc, self.poke.text_type], [34, 41], [2, 5]
         ):
             obj.add(self.map, _x, _y)
+        mood_text.add(self.map, 68, 5)
         self.add_attack_labels()
         if (tss.height - 1, tss.width) != (self.map.height, self.map.width):
             self.resize_view()
         self.map.show(init=True)
         while True:
             if do_exit:
+                mood_text.remove()
                 self.cleanup()
                 return
             action, _ = get_action()
             if action.triggers(Action.DECK, Action.CANCEL):
+                mood_text.remove()
                 self.cleanup()
                 return
             if action.triggers(Action.NATURE_INFO):
                 poke.nature.info(ctx)
             elif action.triggers(Action.STATS_INFO):
                 StatsInfoBox(poke.poke_stats)(ctx.with_overview(self))
+            elif action.triggers(Action.MOOD_INFO):
+                MoodInfoBox(poke.mood)(ctx.with_overview(self))
             elif action.triggers(Action.ABILITIES_INFO):
                 if abb_obs != [] and abb:
                     with ChooseBox(
