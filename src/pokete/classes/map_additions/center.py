@@ -11,6 +11,8 @@ from pokete.classes.doors import CenterDoor
 from pokete.classes.interactions.multi_text_choose_box import MultiTextChooseBox
 from pokete.classes.inv import buy
 from pokete.classes.landscape import MapInteract
+from pokete.classes.poke import MoodEvent
+from pokete.classes.timer import time as game_time
 from pokete.release import SPEED_OF_TIME
 
 CUDDLE_MESSAGES = [
@@ -154,6 +156,7 @@ class CenterInteract(se.Object, MapInteract):
                     )
                     if selected_idx is not None:
                         poke = ob.pokes[selected_idx]
+                        poke.trigger_mood_event(MoodEvent.CUDDLED, game_time.time)
                         message = random.choice(CUDDLE_MESSAGES).format(
                             name=poke.name
                         )

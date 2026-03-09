@@ -1,1 +1,1 @@
-from .pokete import *
+# Tests are imported individually, not via wildcard

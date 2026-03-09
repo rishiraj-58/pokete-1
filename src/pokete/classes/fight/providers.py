@@ -6,9 +6,10 @@ from abc import ABC, abstractmethod
 
 from pokete.base.context import Context
 from pokete.base.input_loops import ask_bool
+from pokete.classes.timer import time as game_time
 
 from ..achievements import achievements
-from ..poke import Poke
+from ..poke import MoodEvent, Poke
 from .fight_decision import FightDecision
 
 
@@ -36,11 +37,13 @@ class Provider(ABC):
     def heal(self):
         """Heals all poketes"""
         if self.pokes:
+            current_time = game_time.time
             for poke in self.pokes:
                 poke.hp = poke.full_hp
                 poke.effects = []
                 poke.miss_chance = poke.full_miss_chance
                 poke.text_hp.rechar(f"HP:{poke.hp}")
+                poke.trigger_mood_event(MoodEvent.HEALED, current_time)
                 poke.set_vars()
                 poke.hp_bar.make(poke.hp)
             if poke.player:

@@ -1,14 +1,19 @@
 """Contains classes nedded for pokete stats"""
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import scrap_engine as se
 
 from pokete.base import loops
+from pokete.base.color import Color
 from pokete.base.context import Context
 from pokete.base.ui.elements.labels import CloseLabel
 from pokete.base.ui.views.boxes import LabelBoxView
 from pokete.classes.model.poke import StatsDict
+
+if TYPE_CHECKING:
+    from .mood import PokeMood
 
 
 class Stats:
@@ -124,9 +129,10 @@ class Stats:
 class StatsInfoBox(LabelBoxView):
     """Box to show statistics about caught Poketes
     ARGS:
-        poke_stats: PokeStats object"""
+        poke_stats: PokeStats object
+        poke_mood: PokeMood object (optional)"""
 
-    def __init__(self, poke_stats: Stats):
+    def __init__(self, poke_stats: Stats, poke_mood: "PokeMood | None" = None):
         not_available = "N/A"
         if poke_stats.ownership_date is None:
             ownership_date = not_available
@@ -163,9 +169,24 @@ class StatsInfoBox(LabelBoxView):
                 f"\nNumber of run away: {poke_stats.run_away}", state="float"
             )
             + se.Text(
-                f"\nTotal XP earned: {poke_stats.earned_xp}\n", state="float"
+                f"\nTotal XP earned: {poke_stats.earned_xp}", state="float"
             )
         )
+
+        # Add mood information if available
+        if poke_mood is not None:
+            text = (
+                text
+                + se.Text("\nCurrent mood: ", state="float")
+                + se.Text(
+                    poke_mood.name,
+                    esccode=Color.thicc + poke_mood.color,
+                    state="float",
+                )
+            )
+
+        text = text + se.Text("\n", state="float")
+
         super().__init__(
             text,
             name=f"{poke_stats.poke_name} statistics",

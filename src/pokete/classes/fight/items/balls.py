@@ -7,6 +7,8 @@ from pokete.classes.achievements import achievements
 from pokete.classes.fight.fightmap.fightmap import FightMap
 from pokete.classes.fight.providers import Provider
 from pokete.classes.audio import audio
+from pokete.classes.poke import MoodEvent
+from pokete.classes.timer import time as game_time
 from ... import ob_maps as obmp
 from pokete.classes.fight.providers import NatureProvider
 from .item import FightItem, RoundContinuation
@@ -47,6 +49,7 @@ class GenericPokeBall(FightItem, ABC):
                                    * self.chance + catch_chance,
                                    enem.curr.full_hp], k=1)[0]:
             audio.play("xDeviruchi - Decisive Battle (End).mp3")
+            enem.curr.trigger_mood_event(MoodEvent.CAUGHT, game_time.time)
             obj.add_poke(enem.curr, caught_with=self.name)
             fightmap.outp.outp(f"You caught {enem.curr.name}!")
             time.sleep(SPEED_OF_TIME * 2)

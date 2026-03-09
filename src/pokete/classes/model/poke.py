@@ -17,6 +17,13 @@ class NatureDict(TypedDict):
     grade: int
 
 
+class MoodDict(TypedDict):
+    mood_type: str
+    last_battle_time: int
+    battles_since_rest: int
+    last_mood_change_time: int
+
+
 class PokeDict(TypedDict):
     name: str
     xp: int
@@ -27,3 +34,4 @@ class PokeDict(TypedDict):
     shiny: bool
     nature: NatureDict
     stats: StatsDict
+    mood: MoodDict

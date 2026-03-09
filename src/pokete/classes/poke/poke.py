@@ -20,6 +20,7 @@ from ..health_bar import HealthBar
 from ..learnattack import LearnAttack
 from ..moves import Moves
 from ..types import types
+from .mood import MoodEvent, PokeMood
 from .nature import PokeNature
 from .stats import Stats
 
@@ -46,12 +47,14 @@ class Poke:
         shiny=False,
         nature=None,
         stats=None,
+        mood=None,
     ):
         self.nature = (
             PokeNature.random()
             if nature is None
             else PokeNature.from_dict(nature)
         )
+        self.mood = PokeMood.from_dict(mood)
         self.inf: ResourcePoke = asset_service.get_base_assets().pokes[poke]
         self.moves = Moves(self)
         # Attributes
@@ -169,6 +172,11 @@ can't have more than 4 attacks!"
 
     def set_vars(self):
         """Updates/sets some vars"""
+        mood_modifiers = {
+            "atc": self.mood.get_attack_modifier(),
+            "defense": self.mood.get_defense_modifier(),
+            "initiative": self.mood.get_initiative_modifier(),
+        }
         for name in ["atc", "defense", "initiative"]:
             setattr(
                 self,
@@ -180,8 +188,13 @@ can't have more than 4 attacks!"
                         + (2 if self.shiny else 0)
                     )
                     * self.nature.get_value(name)
+                    * mood_modifiers[name]
                 ),
             )
+        # Apply mood miss chance modifier
+        self.miss_chance = round(
+            self.inf.miss_chance * self.mood.get_miss_chance_modifier()
+        )
         for atc in self.attack_obs:
             atc.set_ap(atc.max_ap)
 
@@ -198,6 +211,7 @@ can't have more than 4 attacks!"
             "shiny": self.shiny,
             "nature": self.nature.dict(),
             "stats": self.poke_stats.dict(),
+            "mood": self.mood.dict(),
         }
 
     def set_ap(self, aps):
@@ -207,10 +221,11 @@ can't have more than 4 attacks!"
         for atc, ap in zip(self.attack_obs, aps):
             atc.set_ap(ap)
 
-    def add_xp(self, _xp):
+    def add_xp(self, _xp, current_time: int = 0):
         """Adds xp to the current pokete
         ARGS:
             _xp: Amount of xp added to the current xp
+            current_time: The current in-game time for mood tracking
         RETURNS:
             bool: whether or not the next level is reached"""
         old_lvl = self.lvl()
@@ -226,6 +241,7 @@ can't have more than 4 attacks!"
         )
         if old_lvl < self.lvl():
             logging.info("[Poke][%s] Reached lvl. %d", self.name, self.lvl())
+            self.mood.trigger_event(MoodEvent.LEVEL_UP, current_time)
             return True
         return False
 
@@ -239,12 +255,14 @@ can't have more than 4 attacks!"
         if self.lvl() % 5 == 0:
             LearnAttack(self)(ctx)
 
-    def get_evolve_poke(self) -> "Poke":
+    def get_evolve_poke(self, current_time: int = 0) -> "Poke":
         new = Poke(
-            self.evolve_poke, self.xp, _attacks=self.attacks, shiny=self.shiny
+            self.evolve_poke, self.xp, _attacks=self.attacks, shiny=self.shiny,
+            mood=self.mood.dict()
         )
         new.set_poke_stats(self.poke_stats)
         new.poke_stats.set_evolved_date(datetime.now())
+        new.mood.trigger_event(MoodEvent.EVOLVED, current_time)
         return new
 
     def backup_hp(self):
@@ -253,6 +271,20 @@ can't have more than 4 attacks!"
     def set_hp(self, hp: int):
         """Saves saves hp"""
         self.hp = max(self.hp - max(hp, 0), 0)
+
+    def trigger_mood_event(self, event: MoodEvent, current_time: int = 0):
+        """Trigger a mood event and update stats if needed
+        ARGS:
+            event: The MoodEvent to trigger
+            current_time: The current in-game time"""
+        old_mood = self.mood.mood_type
+        self.mood.trigger_event(event, current_time)
+        if self.mood.mood_type != old_mood:
+            self.set_vars()
+            logging.info(
+                "[Poke][%s] Mood changed from %s to %s",
+                self.name, old_mood.value, self.mood.mood_type.value
+            )
 
     @classmethod
     def from_dict(cls, _dict):
@@ -267,6 +299,7 @@ can't have more than 4 attacks!"
             shiny=_dict.get("shiny", False),
             nature=_dict.get("nature"),
             stats=_dict.get("stats", None),
+            mood=_dict.get("mood", None),
         )
 
     @classmethod

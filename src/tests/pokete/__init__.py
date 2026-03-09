@@ -1,1 +1,1 @@
-from .util import *
+# Tests are imported individually, not via wildcard

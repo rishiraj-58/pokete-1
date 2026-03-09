@@ -1,7 +1,8 @@
 from pokete.classes.asset_service.service import asset_service
 from pokete.classes.npcs import NPCAction
 from pokete.classes.npcs.npc_action import NPCInterface, UIInterface
-from pokete.classes.poke import Poke
+from pokete.classes.poke import MoodEvent, Poke
+from pokete.classes.timer import time as game_time
 
 
 class GiveBasic(NPCAction):
@@ -56,6 +57,9 @@ class Playmap20Trader(NPCAction):
         if (index := ui.choose_poke()) is None:
             return
         poke = Poke("ostri", 500)
+        current_time = game_time.time
+        # The traded-away poke would get TRADED event, new poke gets CAUGHT-like event
+        poke.trigger_mood_event(MoodEvent.TRADED, current_time)
         npc.ctx.figure.add_poke(poke, index)
         npc.set_used()
         ui.ask_ok(

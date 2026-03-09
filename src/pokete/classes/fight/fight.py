@@ -12,11 +12,12 @@ from pokete.base.single_event import single_event_periodic_event
 from pokete.base.tss import tss
 from pokete.classes.fight.items.item import RoundContinuation
 from pokete.classes.items.invitem import InvItem
+from pokete.classes.timer import time as game_time
 from pokete.release import SPEED_OF_TIME
 
 from ..attack import Attack
 from ..audio import audio
-from ..poke import EvoMap
+from ..poke import EvoMap, MoodEvent
 from .attack_process import AttackProcess
 from .fight_decision import Result
 from .fightmap import FightMap
@@ -165,7 +166,8 @@ class Fight:
         self.fightmap.declare_winner(winner, xp)
 
         winner.handle_win(ctx, loser)
-        if winner.curr.player and winner.curr.add_xp(xp):
+        current_time = game_time.time
+        if winner.curr.player and winner.curr.add_xp(xp, current_time):
             self.fightmap.win_animation(winner)
             winner.curr.set_vars()
             winner.curr.learn_attack(ctx.with_overview(self.fightmap))
@@ -174,8 +176,10 @@ class Fight:
 
         if winner.curr.player:
             winner.curr.poke_stats.add_battle(True)
+            winner.curr.trigger_mood_event(MoodEvent.BATTLE_WIN, current_time)
         else:
             loser.curr.poke_stats.add_battle(False)
+            loser.curr.trigger_mood_event(MoodEvent.BATTLE_LOSS, current_time)
 
         self.fightmap.death_animation(loser)
         self.fightmap.clean_up(winner)

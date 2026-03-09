@@ -1,1 +1,1 @@
-from .semantic_version import *
+# Tests are imported individually, not via wildcard

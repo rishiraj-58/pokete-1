@@ -21,6 +21,7 @@ from pokete.base.ui.elements import ChooseBox, StdFrame2
 from pokete.classes.single_events import TeleportationSingleEvent
 from pokete.util import liner
 
+from .poke.mood import MoodInfo
 from .poke.stats import StatsInfoBox
 
 
@@ -107,6 +108,9 @@ class Detail(Informer, Overview):
         self.stats_label = se.Text(
             f"{Action.STATS_INFO.mapping}: Statistics", state="float"
         )
+        self.mood_label = se.Text(
+            f"{Action.MOOD_INFO.mapping}: Mood", state="float"
+        )
         self.ability_label = se.Text(
             f"{Action.ABILITIES_INFO.mapping}: Use ability", state="float"
         )
@@ -123,7 +127,8 @@ class Detail(Informer, Overview):
         self.exit_label.add(self.map, 0, self.map.height - 1)
         self.nature_label.add(self.map, 9, self.map.height - 1)
         self.stats_label.add(self.map, 20, self.map.height - 1)
-        self.ability_label.add(self.map, 35, self.map.height - 1)
+        self.mood_label.add(self.map, 35, self.map.height - 1)
+        self.ability_label.add(self.map, 45, self.map.height - 1)
         self.line_sep1.add(self.map, 1, 6)
         self.line_sep2.add(self.map, 1, 11)
         self.frame.add(self.map, 0, 0)
@@ -138,6 +143,7 @@ class Detail(Informer, Overview):
         abb_added = self.ability_label.added
         self.ability_label.remove()
         self.stats_label.remove()
+        self.mood_label.remove()
         self.line_sep1.remove()
         self.line_sep2.remove()
         self.frame.remove()
@@ -164,8 +170,9 @@ class Detail(Informer, Overview):
         self.exit_label.add(self.map, 0, self.map.height - 1)
         self.nature_label.add(self.map, 9, self.map.height - 1)
         self.stats_label.add(self.map, 20, self.map.height - 1)
+        self.mood_label.add(self.map, 35, self.map.height - 1)
         if abb_added:
-            self.ability_label.add(self.map, 35, self.map.height - 1)
+            self.ability_label.add(self.map, 45, self.map.height - 1)
         self.poke.desc.add(self.map, self.poke.desc.x, self.poke.desc.y)
         self.add_attack_labels()
         self.line_middle.add(self.map, round(self.map.width / 2), 7)
@@ -272,7 +279,10 @@ class Detail(Informer, Overview):
             if action.triggers(Action.NATURE_INFO):
                 poke.nature.info(ctx)
             elif action.triggers(Action.STATS_INFO):
-                StatsInfoBox(poke.poke_stats)(ctx.with_overview(self))
+                StatsInfoBox(poke.poke_stats, poke.mood)(ctx.with_overview(self))
+            elif action.triggers(Action.MOOD_INFO):
+                poke.mood._init_info()
+                poke.mood.info(ctx.with_overview(self))
             elif action.triggers(Action.ABILITIES_INFO):
                 if abb_obs != [] and abb:
                     with ChooseBox(
