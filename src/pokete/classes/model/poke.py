@@ -21,8 +21,10 @@ class MoodDict(TypedDict, total=False):
     mood_type: str
     intensity: int
     last_battle_time: int
+    last_mood_update_time: int
     consecutive_wins: int
     consecutive_losses: int
+    consecutive_battles: int
 
 
 class PokeDict(TypedDict):

@@ -197,6 +197,12 @@ class Figure(se.Object, Inventory, ProtoFigure, Bank):
     def balls_label_rechar(self):
         mvp.movemap.balls_label_rechar(self.pokes)
 
+    def cuddle_all(self):
+        """Cuddle all poketes to improve their mood."""
+        for poke in self.pokes:
+            if poke.identifier != "__fallback__":
+                poke.mood.on_cuddle()
+
 
 class Debug:
     """Debug class"""

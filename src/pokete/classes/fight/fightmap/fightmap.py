@@ -179,6 +179,18 @@ class FightMap(gm.GameMap, Overview, MouseInteractor):
             player: The player provider object
             resize: Whether or not the box is beeing resized"""
         player.curr.text_name.add(self, self.width - 17, self.height - 9)
+        # Add mood indicator next to name
+        if hasattr(player.curr, 'mood'):
+            mood_indicator = se.Text(
+                f" {player.curr.mood.indicator}",
+                esccode=player.curr.mood.color,
+                state="float"
+            )
+            mood_indicator.add(
+                self,
+                self.width - 17 + len(player.curr.name) + 1,
+                self.height - 9
+            )
         player.curr.text_lvl.add(self, self.width - 17, self.height - 8)
         player.curr.tril.add(self, self.width - 11, self.height - 7)
         player.curr.trir.add(self, self.width - 2, self.height - 7)
@@ -210,6 +222,14 @@ class FightMap(gm.GameMap, Overview, MouseInteractor):
             (3, 3, 1, 2, 3, 2, 3),
         ):
             obj.add(self, _x, _y)
+        # Add mood indicator for enemy
+        if hasattr(enem.curr, 'mood'):
+            mood_indicator = se.Text(
+                f" {enem.curr.mood.indicator}",
+                esccode=enem.curr.mood.color,
+                state="float"
+            )
+            mood_indicator.add(self, 1 + len(enem.curr.name) + 1, 1)
         if enem.curr.identifier in player.caught_pokes:
             enem.curr.pball_small.add(self, len(self.e_underline.text) - 1, 1)
 

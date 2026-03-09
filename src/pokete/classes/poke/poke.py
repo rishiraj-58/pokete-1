@@ -54,10 +54,12 @@ class Poke:
             if nature is None
             else PokeNature.from_dict(nature)
         )
+        # Initialize mood with nature for affinity calculations
+        nature_name = self.nature.nature.name if self.nature else "normal"
         self.mood = (
-            PokeMood()
+            PokeMood(nature_name=nature_name)
             if mood is None
-            else PokeMood.from_dict(mood)
+            else PokeMood.from_dict(mood, nature_name=nature_name)
         )
         self.inf: ResourcePoke = asset_service.get_base_assets().pokes[poke]
         self.moves = Moves(self)
@@ -221,24 +223,30 @@ can't have more than 4 attacks!"
             atc.set_ap(ap)
 
     def add_xp(self, _xp):
-        """Adds xp to the current pokete
+        """Adds xp to the current pokete, applying mood XP multiplier.
         ARGS:
-            _xp: Amount of xp added to the current xp
+            _xp: Base amount of xp to add
         RETURNS:
             bool: whether or not the next level is reached"""
         old_lvl = self.lvl()
-        self.xp += _xp
-        self.poke_stats.add_xp(_xp)
+        # Apply mood XP multiplier
+        xp_multiplier = self.mood.get_xp_multiplier()
+        actual_xp = round(_xp * xp_multiplier)
+        self.xp += actual_xp
+        self.poke_stats.add_xp(actual_xp)
         self.text_xp.rechar(
             f"XP:{self.xp - (self.lvl() ** 2 - 1)}/\
 {((self.lvl() + 1) ** 2 - 1) - (self.lvl() ** 2 - 1)}"
         )
         self.text_lvl.rechar(f"Lvl:{self.lvl()}")
         logging.info(
-            "[Poke][%s] Gained %dxp (curr:%d)", self.name, _xp, self.xp
+            "[Poke][%s] Gained %dxp (base: %d, multiplier: %.2f, curr:%d)",
+            self.name, actual_xp, _xp, xp_multiplier, self.xp
         )
         if old_lvl < self.lvl():
             logging.info("[Poke][%s] Reached lvl. %d", self.name, self.lvl())
+            # Trigger mood boost on level up
+            self.mood.on_level_up()
             return True
         return False
 
@@ -310,6 +318,7 @@ can't have more than 4 attacks!"
             player=False,
             shiny=(random.randint(0, 500) == 0),
         )
-        # Wild poketes have random moods
-        wild_poke.mood = PokeMood.random()
+        # Wild poketes have random moods with their nature affinity
+        nature_name = wild_poke.nature.nature.name
+        wild_poke.mood = PokeMood.random(nature_name=nature_name)
         return wild_poke
