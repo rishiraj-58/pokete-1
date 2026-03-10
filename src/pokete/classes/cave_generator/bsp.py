@@ -1,8 +1,17 @@
 """Binary Space Partitioning algorithm for dungeon generation."""
 from __future__ import annotations
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Optional
 import random
+
+
+class RoomType(Enum):
+    """Types of special rooms in the dungeon."""
+    NORMAL = auto()
+    TREASURE = auto()
+    HEALING = auto()
+    TRAP = auto()
 
 
 @dataclass
@@ -38,9 +47,10 @@ class Rect:
 class Room:
     """A room within the dungeon."""
 
-    def __init__(self, rect: Rect):
+    def __init__(self, rect: Rect, room_type: RoomType = RoomType.NORMAL):
         self.rect = rect
         self.connected_to: list["Room"] = []
+        self.room_type = room_type
         self._id = id(self)
 
     def __hash__(self):
@@ -56,6 +66,10 @@ class Room:
             self.connected_to.append(other)
         if self not in other.connected_to:
             other.connected_to.append(self)
+
+    @property
+    def is_special(self) -> bool:
+        return self.room_type != RoomType.NORMAL
 
 
 class BSPNode:
@@ -161,10 +175,19 @@ class BSPNode:
         return None
 
 
+@dataclass
+class SpecialRoomConfig:
+    """Configuration for special room generation."""
+    treasure_chance: float = 0.15
+    healing_chance: float = 0.10
+    trap_chance: float = 0.10
+
+
 class BSPTree:
     """A complete BSP tree for dungeon generation."""
 
-    def __init__(self, width: int, height: int, seed: Optional[int] = None):
+    def __init__(self, width: int, height: int, seed: Optional[int] = None,
+                 special_room_config: Optional[SpecialRoomConfig] = None):
         self.width = width
         self.height = height
         self.seed = seed if seed is not None else random.randint(0, 2**32 - 1)
@@ -172,12 +195,14 @@ class BSPTree:
         self.root = BSPNode(Rect(0, 0, width, height))
         self.rooms: list[Room] = []
         self.corridors: list[tuple[tuple[int, int], tuple[int, int]]] = []
+        self.special_config = special_room_config or SpecialRoomConfig()
 
     def generate(self, max_depth: int = 4, min_size: int = 8,
                  min_room_size: int = 4) -> "BSPTree":
         """Generate the complete dungeon layout."""
         self._split_recursive(self.root, 0, max_depth, min_size)
         self._create_rooms(min_room_size)
+        self._assign_special_rooms()
         self._connect_rooms()
         return self
 
@@ -197,6 +222,28 @@ class BSPTree:
             room = leaf.create_room(self.rng, min_room_size)
             if room:
                 self.rooms.append(room)
+
+    def _assign_special_rooms(self):
+        """Assign special room types to some rooms."""
+        if len(self.rooms) < 3:
+            return
+
+        entry_room, exit_room = self.get_furthest_rooms()
+        excluded = {entry_room, exit_room}
+
+        available = [r for r in self.rooms if r not in excluded]
+        self.rng.shuffle(available)
+
+        for room in available:
+            roll = self.rng.random()
+            if roll < self.special_config.treasure_chance:
+                room.room_type = RoomType.TREASURE
+            elif roll < self.special_config.treasure_chance + self.special_config.healing_chance:
+                room.room_type = RoomType.HEALING
+            elif roll < (self.special_config.treasure_chance +
+                        self.special_config.healing_chance +
+                        self.special_config.trap_chance):
+                room.room_type = RoomType.TRAP
 
     def _connect_rooms(self):
         """Connect all rooms with corridors."""
@@ -307,3 +354,11 @@ class BSPTree:
     def has_isolated_rooms(self) -> bool:
         """Check if there are any isolated (unreachable) rooms."""
         return not self.is_connected()
+
+    def get_rooms_by_type(self, room_type: RoomType) -> list[Room]:
+        """Get all rooms of a specific type."""
+        return [r for r in self.rooms if r.room_type == room_type]
+
+    def get_special_rooms(self) -> list[Room]:
+        """Get all special (non-normal) rooms."""
+        return [r for r in self.rooms if r.is_special]

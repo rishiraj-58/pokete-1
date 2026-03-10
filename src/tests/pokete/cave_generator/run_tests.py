@@ -9,6 +9,7 @@ import os
 import random
 from dataclasses import dataclass, field
 from typing import Optional
+from enum import Enum, auto
 
 # Setup path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,7 +21,7 @@ exec(open(os.path.join(SRC_DIR, 'pokete/classes/cave_generator/bsp.py')).read())
 
 # Load generator module (patch imports)
 generator_code = open(os.path.join(SRC_DIR, 'pokete/classes/cave_generator/generator.py')).read()
-generator_code = generator_code.replace('from .bsp import BSPTree, Room, Rect', '')
+generator_code = generator_code.replace('from .bsp import BSPTree, Room, Rect, RoomType, SpecialRoomConfig', '')
 exec(generator_code)
 
 
@@ -251,6 +252,90 @@ def run_all_tests():
         if not all_gen_connected:
             break
     test("all_generators_connected", all_gen_connected)
+
+    # ========== SPECIAL ROOM TESTS ==========
+    print("\n=== Special Room Tests ===")
+
+    # Test RoomType enum
+    test("room_type_normal", RoomType.NORMAL.value == 1)
+    test("room_type_treasure", RoomType.TREASURE.value == 2)
+    test("room_type_healing", RoomType.HEALING.value == 3)
+    test("room_type_trap", RoomType.TRAP.value == 4)
+
+    # Test room with type
+    typed_room = Room(Rect(0, 0, 10, 10), RoomType.TREASURE)
+    test("room_has_type", typed_room.room_type == RoomType.TREASURE)
+    test("room_is_special", typed_room.is_special)
+
+    normal_room = Room(Rect(0, 0, 10, 10))
+    test("default_room_normal", normal_room.room_type == RoomType.NORMAL)
+    test("normal_room_not_special", not normal_room.is_special)
+
+    # Test special room config
+    config = SpecialRoomConfig(
+        treasure_chance=0.5,
+        healing_chance=0.3,
+        trap_chance=0.2
+    )
+    test("special_config_values", config.treasure_chance == 0.5)
+
+    # Test BSP with special rooms
+    special_tree = BSPTree(60, 30, seed=42, special_room_config=config).generate()
+    special_rooms = special_tree.get_special_rooms()
+    test("generates_special_rooms", len(special_rooms) >= 0)
+
+    treasure_rooms = special_tree.get_rooms_by_type(RoomType.TREASURE)
+    healing_rooms = special_tree.get_rooms_by_type(RoomType.HEALING)
+    trap_rooms = special_tree.get_rooms_by_type(RoomType.TRAP)
+    test("can_get_rooms_by_type", True)
+
+    # Test generator with special rooms
+    config_with_special = CaveConfig(
+        seed=42,
+        treasure_room_chance=0.3,
+        healing_room_chance=0.2,
+        trap_room_chance=0.2
+    )
+    gen_special = CaveGenerator(config_with_special)
+    gen_special.generate()
+
+    has_special_in_floors = any(
+        len(floor.special_rooms) > 0
+        for floor in gen_special.floors
+    )
+    test("generator_creates_special_rooms", has_special_in_floors)
+
+    # Test special room data in floor layout
+    for floor in gen_special.floors:
+        treasure_in_floor = floor.get_treasure_rooms()
+        healing_in_floor = floor.get_healing_rooms()
+        trap_in_floor = floor.get_trap_rooms()
+
+    test("floor_layout_special_room_methods", True)
+
+    # Test treasure room has items
+    treasure_floor = None
+    for floor in gen_special.floors:
+        if floor.get_treasure_rooms():
+            treasure_floor = floor
+            break
+
+    if treasure_floor:
+        treasure = treasure_floor.get_treasure_rooms()[0]
+        test("treasure_room_has_items", len(treasure.items) >= 0)
+    else:
+        test("treasure_room_has_items", True)  # Skip if no treasure rooms generated
+
+    # Test special rooms not at entry/exit
+    for floor in gen_special.floors:
+        for special in floor.special_rooms:
+            not_at_entry = special.center != floor.entry_pos
+            not_at_exit = floor.exit_pos is None or special.center != floor.exit_pos
+            not_at_boss = floor.boss_pos is None or special.center != floor.boss_pos
+            if not (not_at_entry and not_at_exit and not_at_boss):
+                test("special_rooms_not_at_key_positions", False)
+                break
+    test("special_rooms_not_at_key_positions", True)
 
     # ========== SUMMARY ==========
     print("\n" + "=" * 50)

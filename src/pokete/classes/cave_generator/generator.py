@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 import random
 
-from .bsp import BSPTree, Room, Rect
+from .bsp import BSPTree, Room, Rect, RoomType, SpecialRoomConfig
 
 
 @dataclass
@@ -36,6 +36,25 @@ class CaveConfig:
     item_weights: list[float] = field(default_factory=lambda: [
         10.0, 3.0, 1.0, 5.0, 2.0, 0.5
     ])
+    treasure_room_chance: float = 0.15
+    healing_room_chance: float = 0.10
+    trap_room_chance: float = 0.10
+    treasure_items: list[str] = field(default_factory=lambda: [
+        "hyperball", "super_potion", "treat"
+    ])
+    treasure_item_count_min: int = 2
+    treasure_item_count_max: int = 4
+    trap_damage_percent: float = 0.25
+    healing_amount_percent: float = 0.5
+
+
+@dataclass
+class SpecialRoom:
+    """Information about a special room."""
+    room: Room
+    room_type: RoomType
+    center: tuple[int, int]
+    items: list[tuple[int, int, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -53,6 +72,7 @@ class FloorLayout:
     max_level: int
     is_boss_floor: bool
     bsp: BSPTree
+    special_rooms: list[SpecialRoom] = field(default_factory=list)
 
     @property
     def width(self) -> int:
@@ -61,6 +81,15 @@ class FloorLayout:
     @property
     def height(self) -> int:
         return len(self.grid)
+
+    def get_treasure_rooms(self) -> list[SpecialRoom]:
+        return [r for r in self.special_rooms if r.room_type == RoomType.TREASURE]
+
+    def get_healing_rooms(self) -> list[SpecialRoom]:
+        return [r for r in self.special_rooms if r.room_type == RoomType.HEALING]
+
+    def get_trap_rooms(self) -> list[SpecialRoom]:
+        return [r for r in self.special_rooms if r.room_type == RoomType.TRAP]
 
 
 class CaveGenerator:
@@ -88,10 +117,17 @@ class CaveGenerator:
         is_boss_floor = floor_num == self.config.num_floors - 1
         floor_seed = self.seed + floor_num * 1000
 
+        special_config = SpecialRoomConfig(
+            treasure_chance=self.config.treasure_room_chance,
+            healing_chance=self.config.healing_room_chance,
+            trap_chance=self.config.trap_room_chance
+        )
+
         bsp = BSPTree(
             self.config.width,
             self.config.height,
-            seed=floor_seed
+            seed=floor_seed,
+            special_room_config=special_config
         ).generate(
             max_depth=self.config.max_depth,
             min_size=self.config.min_partition_size,
@@ -115,6 +151,7 @@ class CaveGenerator:
 
         item_positions = self._place_items(bsp, entry_pos, exit_pos, boss_pos)
         encounter_positions = self._place_encounters(bsp, entry_pos)
+        special_rooms = self._process_special_rooms(bsp)
 
         min_level = self.config.base_level + floor_num * self.config.level_increment
         max_level = min_level + self.config.level_increment
@@ -134,7 +171,8 @@ class CaveGenerator:
             min_level=min_level,
             max_level=max_level,
             is_boss_floor=is_boss_floor,
-            bsp=bsp
+            bsp=bsp,
+            special_rooms=special_rooms
         )
 
     def _get_room_position(self, room: Optional[Room], rng: random.Random) -> tuple[int, int]:
@@ -192,6 +230,34 @@ class CaveGenerator:
                     break
 
         return items
+
+    def _process_special_rooms(self, bsp: BSPTree) -> list[SpecialRoom]:
+        """Process special rooms and populate their contents."""
+        special_rooms = []
+
+        for room in bsp.get_special_rooms():
+            center = room.rect.center
+            items = []
+
+            if room.room_type == RoomType.TREASURE:
+                num_items = bsp.rng.randint(
+                    self.config.treasure_item_count_min,
+                    self.config.treasure_item_count_max
+                )
+                for _ in range(num_items):
+                    item_name = bsp.rng.choice(self.config.treasure_items)
+                    x = bsp.rng.randint(room.rect.x + 1, room.rect.x2 - 2)
+                    y = bsp.rng.randint(room.rect.y + 1, room.rect.y2 - 2)
+                    items.append((x, y, item_name))
+
+            special_rooms.append(SpecialRoom(
+                room=room,
+                room_type=room.room_type,
+                center=center,
+                items=items
+            ))
+
+        return special_rooms
 
     def _place_encounters(self, bsp: BSPTree,
                           entry_pos: tuple[int, int]) -> list[tuple[int, int]]:
