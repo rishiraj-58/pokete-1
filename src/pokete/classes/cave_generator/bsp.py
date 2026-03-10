@@ -1,86 +1,86 @@
 """Binary Space Partitioning algorithm for dungeon generation."""
-
+from __future__ import annotations
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Optional
 import random
 
 
+class RoomType(Enum):
+    """Types of special rooms in the dungeon."""
+    NORMAL = auto()
+    TREASURE = auto()
+    HEALING = auto()
+    TRAP = auto()
+    ENTRY = auto()
+    EXIT = auto()
+    BOSS = auto()
+
+
 @dataclass
 class Rect:
-    """Rectangle representing a room or partition."""
+    """A rectangle defined by position and size."""
     x: int
     y: int
     width: int
     height: int
 
     @property
-    def center_x(self) -> int:
-        return self.x + self.width // 2
+    def center(self) -> tuple[int, int]:
+        return (self.x + self.width // 2, self.y + self.height // 2)
 
     @property
-    def center_y(self) -> int:
-        return self.y + self.height // 2
-
-    @property
-    def right(self) -> int:
+    def x2(self) -> int:
         return self.x + self.width
 
     @property
-    def bottom(self) -> int:
+    def y2(self) -> int:
         return self.y + self.height
+
+    def contains(self, x: int, y: int) -> bool:
+        return self.x <= x < self.x2 and self.y <= y < self.y2
 
     def intersects(self, other: "Rect") -> bool:
         return not (
-            self.right <= other.x or
-            other.right <= self.x or
-            self.bottom <= other.y or
-            other.bottom <= self.y
+            self.x2 <= other.x or other.x2 <= self.x or
+            self.y2 <= other.y or other.y2 <= self.y
         )
 
-    def shrink(self, amount: int) -> "Rect":
-        return Rect(
-            self.x + amount,
-            self.y + amount,
-            max(1, self.width - 2 * amount),
-            max(1, self.height - 2 * amount)
-        )
+    @property
+    def area(self) -> int:
+        return self.width * self.height
 
 
 class Room:
-    """A room in the dungeon."""
-    
-    def __init__(
-        self, 
-        rect: Rect, 
-        is_boss_room: bool = False,
-        is_entry: bool = False,
-        is_exit: bool = False
-    ):
+    """A room within the dungeon."""
+
+    def __init__(self, rect: Rect, room_type: RoomType = RoomType.NORMAL):
         self.rect = rect
-        self.is_boss_room = is_boss_room
-        self.is_entry = is_entry
-        self.is_exit = is_exit
+        self.room_type = room_type
+        self.connected_to: list["Room"] = []
         self._id = id(self)
 
-    @property
-    def center(self) -> tuple[int, int]:
-        return (self.rect.center_x, self.rect.center_y)
-    
     def __hash__(self):
         return self._id
-    
+
     def __eq__(self, other):
-        return self._id == other._id if isinstance(other, Room) else False
+        if not isinstance(other, Room):
+            return False
+        return self._id == other._id
 
+    def connect(self, other: "Room"):
+        if other not in self.connected_to:
+            self.connected_to.append(other)
+        if self not in other.connected_to:
+            other.connected_to.append(self)
 
-@dataclass
-class Corridor:
-    """A corridor connecting two rooms."""
-    points: list[tuple[int, int]]
+    @property
+    def is_special(self) -> bool:
+        return self.room_type not in (RoomType.NORMAL, RoomType.ENTRY, RoomType.EXIT)
 
 
 class BSPNode:
-    """Node in the BSP tree."""
+    """A node in the BSP tree representing a partition of space."""
 
     def __init__(self, rect: Rect):
         self.rect = rect
@@ -92,206 +92,288 @@ class BSPNode:
     def is_leaf(self) -> bool:
         return self.left is None and self.right is None
 
+    def split(self, rng: random.Random, min_size: int = 8) -> bool:
+        """Split the node into two children.
 
-class BSPGenerator:
-    """Generates dungeon layouts using Binary Space Partitioning."""
+        Returns True if split was successful, False otherwise.
+        """
+        if not self.is_leaf:
+            return False
 
-    MIN_PARTITION_SIZE = 12
-    MIN_ROOM_SIZE = 5
-    ROOM_MARGIN = 2
+        split_h = rng.random() > 0.5
 
-    def __init__(
-        self,
-        width: int,
-        height: int,
-        rng: random.Random,
-        min_partition_size: int = MIN_PARTITION_SIZE,
-        min_room_size: int = MIN_ROOM_SIZE,
-    ):
-        self.width = width
-        self.height = height
-        self.rng = rng
-        self.min_partition_size = min_partition_size
-        self.min_room_size = min_room_size
-        self.rooms: list[Room] = []
-        self.corridors: list[Corridor] = []
+        if self.rect.width > self.rect.height and self.rect.width / self.rect.height >= 1.25:
+            split_h = False
+        elif self.rect.height > self.rect.width and self.rect.height / self.rect.width >= 1.25:
+            split_h = True
 
-    def generate(self) -> tuple[list[Room], list[Corridor]]:
-        """Generate dungeon using BSP algorithm."""
-        root = BSPNode(Rect(1, 1, self.width - 2, self.height - 2))
-        self._split_node(root)
-        self._create_rooms(root)
-        self._create_corridors(root)
-        return self.rooms, self.corridors
+        max_size = (self.rect.height if split_h else self.rect.width) - min_size
+        if max_size <= min_size:
+            return False
 
-    def _split_node(self, node: BSPNode, depth: int = 0) -> None:
-        """Recursively split a node into two children."""
-        if depth > 5:
-            return
+        split_pos = rng.randint(min_size, max_size)
 
-        if (
-            node.rect.width < self.min_partition_size * 2 and
-            node.rect.height < self.min_partition_size * 2
-        ):
-            return
-
-        can_split_horizontal = node.rect.height >= self.min_partition_size * 2
-        can_split_vertical = node.rect.width >= self.min_partition_size * 2
-
-        if not can_split_horizontal and not can_split_vertical:
-            return
-
-        if can_split_horizontal and can_split_vertical:
-            split_horizontal = self.rng.random() < 0.5
-        else:
-            split_horizontal = can_split_horizontal
-
-        if split_horizontal:
-            split_pos = self.rng.randint(
-                self.min_partition_size,
-                node.rect.height - self.min_partition_size
-            )
-            node.left = BSPNode(Rect(
-                node.rect.x,
-                node.rect.y,
-                node.rect.width,
-                split_pos
+        if split_h:
+            self.left = BSPNode(Rect(
+                self.rect.x, self.rect.y,
+                self.rect.width, split_pos
             ))
-            node.right = BSPNode(Rect(
-                node.rect.x,
-                node.rect.y + split_pos,
-                node.rect.width,
-                node.rect.height - split_pos
+            self.right = BSPNode(Rect(
+                self.rect.x, self.rect.y + split_pos,
+                self.rect.width, self.rect.height - split_pos
             ))
         else:
-            split_pos = self.rng.randint(
-                self.min_partition_size,
-                node.rect.width - self.min_partition_size
-            )
-            node.left = BSPNode(Rect(
-                node.rect.x,
-                node.rect.y,
-                split_pos,
-                node.rect.height
+            self.left = BSPNode(Rect(
+                self.rect.x, self.rect.y,
+                split_pos, self.rect.height
             ))
-            node.right = BSPNode(Rect(
-                node.rect.x + split_pos,
-                node.rect.y,
-                node.rect.width - split_pos,
-                node.rect.height
+            self.right = BSPNode(Rect(
+                self.rect.x + split_pos, self.rect.y,
+                self.rect.width - split_pos, self.rect.height
             ))
 
-        self._split_node(node.left, depth + 1)
-        self._split_node(node.right, depth + 1)
+        return True
 
-    def _create_rooms(self, node: BSPNode) -> None:
-        """Create rooms in leaf nodes."""
-        if node.is_leaf:
-            max_width = node.rect.width - 2 * self.ROOM_MARGIN
-            max_height = node.rect.height - 2 * self.ROOM_MARGIN
+    def get_leaves(self) -> list["BSPNode"]:
+        """Get all leaf nodes in this subtree."""
+        if self.is_leaf:
+            return [self]
 
-            if max_width < self.min_room_size or max_height < self.min_room_size:
-                return
+        leaves = []
+        if self.left:
+            leaves.extend(self.left.get_leaves())
+        if self.right:
+            leaves.extend(self.right.get_leaves())
+        return leaves
 
-            room_width = self.rng.randint(
-                self.min_room_size,
-                max_width
-            )
-            room_height = self.rng.randint(
-                self.min_room_size,
-                max_height
-            )
-
-            room_x = node.rect.x + self.rng.randint(
-                self.ROOM_MARGIN,
-                node.rect.width - room_width - self.ROOM_MARGIN
-            )
-            room_y = node.rect.y + self.rng.randint(
-                self.ROOM_MARGIN,
-                node.rect.height - room_height - self.ROOM_MARGIN
-            )
-
-            node.room = Room(Rect(room_x, room_y, room_width, room_height))
-            self.rooms.append(node.room)
-        else:
-            if node.left:
-                self._create_rooms(node.left)
-            if node.right:
-                self._create_rooms(node.right)
-
-    def _create_corridors(self, node: BSPNode) -> None:
-        """Create corridors connecting rooms."""
-        if node.is_leaf:
-            return
-
-        if node.left:
-            self._create_corridors(node.left)
-        if node.right:
-            self._create_corridors(node.right)
-
-        left_room = self._get_room(node.left)
-        right_room = self._get_room(node.right)
-
-        if left_room and right_room:
-            corridor = self._connect_rooms(left_room, right_room)
-            self.corridors.append(corridor)
-
-    def _get_room(self, node: Optional[BSPNode]) -> Optional[Room]:
-        """Get a room from a node or its descendants."""
-        if node is None:
+    def create_room(self, rng: random.Random, min_room_size: int = 4,
+                    padding: int = 1) -> Optional[Room]:
+        """Create a room within this leaf node."""
+        if not self.is_leaf:
             return None
 
-        if node.room is not None:
-            return node.room
+        available_width = self.rect.width - 2 * padding
+        available_height = self.rect.height - 2 * padding
 
-        rooms = []
-        if node.left:
-            room = self._get_room(node.left)
-            if room:
-                rooms.append(room)
-        if node.right:
-            room = self._get_room(node.right)
-            if room:
-                rooms.append(room)
+        if available_width < min_room_size or available_height < min_room_size:
+            return None
 
-        if rooms:
-            return self.rng.choice(rooms)
+        room_width = rng.randint(min_room_size, available_width)
+        room_height = rng.randint(min_room_size, available_height)
+
+        room_x = self.rect.x + padding + rng.randint(0, available_width - room_width)
+        room_y = self.rect.y + padding + rng.randint(0, available_height - room_height)
+
+        self.room = Room(Rect(room_x, room_y, room_width, room_height))
+        return self.room
+
+    def get_room(self) -> Optional[Room]:
+        """Get the room in this node or a descendant."""
+        if self.room:
+            return self.room
+        if self.left:
+            left_room = self.left.get_room()
+            if left_room:
+                return left_room
+        if self.right:
+            right_room = self.right.get_room()
+            if right_room:
+                return right_room
         return None
 
-    def _connect_rooms(self, room1: Room, room2: Room) -> Corridor:
-        """Create an L-shaped corridor between two rooms."""
-        x1, y1 = room1.center
-        x2, y2 = room2.center
 
-        points = []
+@dataclass
+class SpecialRoomConfig:
+    """Configuration for special room generation."""
+    treasure_chance: float = 0.15
+    healing_chance: float = 0.10
+    trap_chance: float = 0.12
+    min_rooms_for_special: int = 4
 
-        if self.rng.random() < 0.5:
-            points.extend(self._horizontal_line(x1, x2, y1))
-            points.extend(self._vertical_line(y1, y2, x2))
+
+class BSPTree:
+    """A complete BSP tree for dungeon generation."""
+
+    def __init__(self, width: int, height: int, seed: Optional[int] = None,
+                 special_config: Optional[SpecialRoomConfig] = None):
+        self.width = width
+        self.height = height
+        self.seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+        self.rng = random.Random(self.seed)
+        self.root = BSPNode(Rect(0, 0, width, height))
+        self.rooms: list[Room] = []
+        self.corridors: list[tuple[tuple[int, int], tuple[int, int]]] = []
+        self.special_config = special_config or SpecialRoomConfig()
+        self.special_rooms: dict[RoomType, list[Room]] = {
+            RoomType.TREASURE: [],
+            RoomType.HEALING: [],
+            RoomType.TRAP: [],
+        }
+
+    def generate(self, max_depth: int = 4, min_size: int = 8,
+                 min_room_size: int = 4) -> "BSPTree":
+        """Generate the complete dungeon layout."""
+        self._split_recursive(self.root, 0, max_depth, min_size)
+        self._create_rooms(min_room_size)
+        self._connect_rooms()
+        self._assign_special_rooms()
+        return self
+
+    def _split_recursive(self, node: BSPNode, depth: int,
+                         max_depth: int, min_size: int):
+        """Recursively split nodes up to max_depth."""
+        if depth >= max_depth:
+            return
+
+        if node.split(self.rng, min_size):
+            self._split_recursive(node.left, depth + 1, max_depth, min_size)
+            self._split_recursive(node.right, depth + 1, max_depth, min_size)
+
+    def _create_rooms(self, min_room_size: int):
+        """Create rooms in all leaf nodes."""
+        for leaf in self.root.get_leaves():
+            room = leaf.create_room(self.rng, min_room_size)
+            if room:
+                self.rooms.append(room)
+
+    def _connect_rooms(self):
+        """Connect all rooms with corridors."""
+        self._connect_recursive(self.root)
+
+    def _connect_recursive(self, node: BSPNode):
+        """Recursively connect rooms in the BSP tree."""
+        if node.is_leaf:
+            return
+
+        if node.left and node.right:
+            self._connect_recursive(node.left)
+            self._connect_recursive(node.right)
+
+            left_room = node.left.get_room()
+            right_room = node.right.get_room()
+
+            if left_room and right_room:
+                self._create_corridor(left_room, right_room)
+
+    def _create_corridor(self, room1: Room, room2: Room):
+        """Create a corridor between two rooms."""
+        room1.connect(room2)
+
+        x1, y1 = room1.rect.center
+        x2, y2 = room2.rect.center
+
+        if self.rng.random() > 0.5:
+            self.corridors.append(((x1, y1), (x2, y1)))
+            self.corridors.append(((x2, y1), (x2, y2)))
         else:
-            points.extend(self._vertical_line(y1, y2, x1))
-            points.extend(self._horizontal_line(x1, x2, y2))
+            self.corridors.append(((x1, y1), (x1, y2)))
+            self.corridors.append(((x1, y2), (x2, y2)))
 
-        return Corridor(points)
+    def _assign_special_rooms(self):
+        """Assign special room types to eligible rooms."""
+        if len(self.rooms) < self.special_config.min_rooms_for_special:
+            return
 
-    def _horizontal_line(
-        self, x1: int, x2: int, y: int
-    ) -> list[tuple[int, int]]:
-        """Generate points for a horizontal corridor."""
-        points = []
-        start = min(x1, x2)
-        end = max(x1, x2)
-        for x in range(start, end + 1):
-            points.append((x, y))
-        return points
+        entry_room, exit_room = self.get_furthest_rooms()
+        reserved = {entry_room, exit_room}
 
-    def _vertical_line(
-        self, y1: int, y2: int, x: int
-    ) -> list[tuple[int, int]]:
-        """Generate points for a vertical corridor."""
-        points = []
-        start = min(y1, y2)
-        end = max(y1, y2)
-        for y in range(start, end + 1):
-            points.append((x, y))
-        return points
+        eligible = [r for r in self.rooms if r not in reserved]
+
+        eligible.sort(key=lambda r: r.rect.area, reverse=True)
+
+        special_assignments = [
+            (RoomType.TREASURE, self.special_config.treasure_chance),
+            (RoomType.HEALING, self.special_config.healing_chance),
+            (RoomType.TRAP, self.special_config.trap_chance),
+        ]
+
+        for room in eligible:
+            if room.room_type != RoomType.NORMAL:
+                continue
+
+            for room_type, chance in special_assignments:
+                if self.rng.random() < chance:
+                    room.room_type = room_type
+                    self.special_rooms[room_type].append(room)
+                    break
+
+    def get_rooms_by_type(self, room_type: RoomType) -> list[Room]:
+        """Get all rooms of a specific type."""
+        return [r for r in self.rooms if r.room_type == room_type]
+
+    def to_grid(self) -> list[list[str]]:
+        """Convert the dungeon to a 2D character grid."""
+        grid = [['#' for _ in range(self.width)] for _ in range(self.height)]
+
+        for room in self.rooms:
+            r = room.rect
+            for y in range(r.y, r.y2):
+                for x in range(r.x, r.x2):
+                    if 0 <= y < self.height and 0 <= x < self.width:
+                        grid[y][x] = '.'
+
+        for (x1, y1), (x2, y2) in self.corridors:
+            min_x, max_x = min(x1, x2), max(x1, x2)
+            min_y, max_y = min(y1, y2), max(y1, y2)
+
+            for x in range(min_x, max_x + 1):
+                if 0 <= y1 < self.height and 0 <= x < self.width:
+                    grid[y1][x] = '.'
+
+            for y in range(min_y, max_y + 1):
+                if 0 <= y < self.height and 0 <= x2 < self.width:
+                    grid[y][x2] = '.'
+
+        return grid
+
+    def get_random_floor_position(self) -> Optional[tuple[int, int]]:
+        """Get a random walkable position in the dungeon."""
+        if not self.rooms:
+            return None
+
+        room = self.rng.choice(self.rooms)
+        r = room.rect
+        x = self.rng.randint(r.x + 1, r.x2 - 2) if r.width > 2 else r.x + r.width // 2
+        y = self.rng.randint(r.y + 1, r.y2 - 2) if r.height > 2 else r.y + r.height // 2
+        return (x, y)
+
+    def get_furthest_rooms(self) -> tuple[Optional[Room], Optional[Room]]:
+        """Get the two rooms that are furthest apart."""
+        if len(self.rooms) < 2:
+            return (self.rooms[0] if self.rooms else None, None)
+
+        max_dist = -1
+        room_a, room_b = None, None
+
+        for i, r1 in enumerate(self.rooms):
+            for r2 in self.rooms[i+1:]:
+                c1, c2 = r1.rect.center, r2.rect.center
+                dist = abs(c1[0] - c2[0]) + abs(c1[1] - c2[1])
+                if dist > max_dist:
+                    max_dist = dist
+                    room_a, room_b = r1, r2
+
+        return (room_a, room_b)
+
+    def is_connected(self) -> bool:
+        """Check if all rooms are connected (reachable from each other)."""
+        if len(self.rooms) <= 1:
+            return True
+
+        visited = set()
+        to_visit = [self.rooms[0]]
+
+        while to_visit:
+            room = to_visit.pop()
+            if room in visited:
+                continue
+            visited.add(room)
+            for connected in room.connected_to:
+                if connected not in visited:
+                    to_visit.append(connected)
+
+        return len(visited) == len(self.rooms)
+
+    def has_isolated_rooms(self) -> bool:
+        """Check if there are any isolated (unreachable) rooms."""
+        return not self.is_connected()

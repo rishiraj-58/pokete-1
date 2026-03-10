@@ -1,310 +1,330 @@
 """Cave generator using BSP algorithm."""
-
-from dataclasses import dataclass
+from __future__ import annotations
+from dataclasses import dataclass, field
 from typing import Optional
 import random
 
-from .bsp import BSPGenerator, Room, Corridor, Rect
+from .bsp import BSPTree, Room, Rect, RoomType, SpecialRoomConfig
 
 
 @dataclass
-class FloorConfig:
-    """Configuration for a dungeon floor."""
-    floor_number: int
-    width: int
-    height: int
-    min_enemy_level: int
-    max_enemy_level: int
-    item_count: int
-    encounter_rate: float
-    is_boss_floor: bool = False
-    available_poketes: list[str] = None
-
-    def __post_init__(self):
-        if self.available_poketes is None:
-            self.available_poketes = []
+class CaveConfig:
+    """Configuration for cave generation."""
+    width: int = 60
+    height: int = 30
+    max_depth: int = 4
+    min_partition_size: int = 8
+    min_room_size: int = 4
+    num_floors: int = 5
+    base_level: int = 100
+    level_increment: int = 50
+    items_per_floor_min: int = 1
+    items_per_floor_max: int = 3
+    encounter_rate: float = 0.15
+    boss_level_multiplier: float = 1.5
+    seed: Optional[int] = None
+    pokes: list[str] = field(default_factory=lambda: [
+        "steini", "bato", "lilstone", "gobost", "rato"
+    ])
+    boss_pokes: list[str] = field(default_factory=lambda: [
+        "bigstone", "lindemon", "rollator", "poundi"
+    ])
+    item_pool: list[str] = field(default_factory=lambda: [
+        "poketeball", "superball", "hyperball",
+        "healing_potion", "super_potion", "treat"
+    ])
+    item_weights: list[float] = field(default_factory=lambda: [
+        10.0, 3.0, 1.0, 5.0, 2.0, 0.5
+    ])
+    treasure_room_items: list[str] = field(default_factory=lambda: [
+        "hyperball", "super_potion", "treat", "ap_potion"
+    ])
+    treasure_room_item_count: int = 3
+    treasure_chance: float = 0.15
+    healing_chance: float = 0.10
+    trap_chance: float = 0.12
+    trap_damage_percent: float = 0.25
+    healing_percent: float = 0.5
 
 
 @dataclass
-class GeneratedFloor:
-    """Result of floor generation."""
+class SpecialRoomData:
+    """Data for a special room."""
+    room: Room
+    room_type: RoomType
+    position: tuple[int, int]
+    items: list[str] = field(default_factory=list)
+
+
+@dataclass
+class FloorLayout:
+    """Layout information for a single floor."""
+    floor_num: int
     grid: list[list[str]]
     rooms: list[Room]
-    corridors: list[Corridor]
-    entry_room: Room
-    exit_room: Optional[Room]
-    boss_room: Optional[Room]
-    item_positions: list[tuple[int, int]]
+    entry_pos: tuple[int, int]
+    exit_pos: Optional[tuple[int, int]]
+    item_positions: list[tuple[int, int, str]]
     encounter_positions: list[tuple[int, int]]
-    config: FloorConfig
+    boss_pos: Optional[tuple[int, int]]
+    min_level: int
+    max_level: int
+    is_boss_floor: bool
+    bsp: BSPTree
+    special_rooms: list[SpecialRoomData] = field(default_factory=list)
+
+    @property
+    def width(self) -> int:
+        return len(self.grid[0]) if self.grid else 0
+
+    @property
+    def height(self) -> int:
+        return len(self.grid)
+
+    def get_special_rooms_by_type(self, room_type: RoomType) -> list[SpecialRoomData]:
+        """Get all special rooms of a specific type."""
+        return [r for r in self.special_rooms if r.room_type == room_type]
 
 
 class CaveGenerator:
-    """Generates procedural dungeon floors."""
+    """Generates procedural cave dungeons using BSP."""
 
-    WALL_CHAR = "#"
-    FLOOR_CHAR = "."
-    CORRIDOR_CHAR = "."
+    def __init__(self, config: Optional[CaveConfig] = None):
+        self.config = config or CaveConfig()
+        self.seed = self.config.seed if self.config.seed is not None else random.randint(0, 2**32 - 1)
+        self.rng = random.Random(self.seed)
+        self.floors: list[FloorLayout] = []
 
-    def __init__(self, seed: int):
-        self.seed = seed
-        self.rng = random.Random(seed)
+    def generate(self) -> list[FloorLayout]:
+        """Generate all floors of the dungeon."""
+        self.floors = []
 
-    def generate_floor(self, config: FloorConfig) -> GeneratedFloor:
-        """Generate a single dungeon floor."""
-        floor_seed = self.seed + config.floor_number * 10000
-        floor_rng = random.Random(floor_seed)
+        for floor_num in range(self.config.num_floors):
+            floor = self._generate_floor(floor_num)
+            self.floors.append(floor)
 
-        grid = self._create_empty_grid(config.width, config.height)
-        bsp = BSPGenerator(config.width, config.height, floor_rng)
-        rooms, corridors = bsp.generate()
+        self._validate_connectivity()
+        return self.floors
 
-        if len(rooms) < 2:
-            rooms = self._create_fallback_rooms(config, floor_rng)
-            corridors = self._create_fallback_corridors(rooms, floor_rng)
+    def _generate_floor(self, floor_num: int) -> FloorLayout:
+        """Generate a single floor."""
+        is_boss_floor = floor_num == self.config.num_floors - 1
+        floor_seed = self.seed + floor_num * 1000
 
-        for room in rooms:
-            self._carve_room(grid, room)
-
-        for corridor in corridors:
-            self._carve_corridor(grid, corridor)
-
-        entry_room, exit_room, boss_room = self._assign_special_rooms(
-            rooms, config, floor_rng
+        special_config = SpecialRoomConfig(
+            treasure_chance=self.config.treasure_chance,
+            healing_chance=self.config.healing_chance,
+            trap_chance=self.config.trap_chance,
         )
 
-        item_positions = self._place_items(
-            grid, rooms, config.item_count, floor_rng
+        bsp = BSPTree(
+            self.config.width,
+            self.config.height,
+            seed=floor_seed,
+            special_config=special_config
+        ).generate(
+            max_depth=self.config.max_depth,
+            min_size=self.config.min_partition_size,
+            min_room_size=self.config.min_room_size
         )
 
-        encounter_positions = self._place_encounter_areas(
-            grid, rooms, entry_room, exit_room, boss_room, floor_rng
-        )
+        grid = bsp.to_grid()
 
-        return GeneratedFloor(
+        entry_room, exit_room = bsp.get_furthest_rooms()
+        if not entry_room:
+            entry_room = bsp.rooms[0] if bsp.rooms else None
+
+        if entry_room:
+            entry_room.room_type = RoomType.ENTRY
+        if exit_room and exit_room != entry_room:
+            exit_room.room_type = RoomType.EXIT if not is_boss_floor else RoomType.BOSS
+
+        entry_pos = self._get_room_position(entry_room, bsp.rng)
+        exit_pos = None
+        boss_pos = None
+
+        if is_boss_floor:
+            boss_pos = self._get_room_position(exit_room, bsp.rng) if exit_room else None
+        else:
+            exit_pos = self._get_room_position(exit_room, bsp.rng) if exit_room else None
+
+        special_rooms_data = self._create_special_room_data(bsp)
+
+        item_positions = self._place_items(bsp, entry_pos, exit_pos, boss_pos, special_rooms_data)
+        encounter_positions = self._place_encounters(bsp, entry_pos, special_rooms_data)
+
+        min_level = self.config.base_level + floor_num * self.config.level_increment
+        max_level = min_level + self.config.level_increment
+
+        if is_boss_floor:
+            max_level = int(max_level * self.config.boss_level_multiplier)
+
+        return FloorLayout(
+            floor_num=floor_num,
             grid=grid,
-            rooms=rooms,
-            corridors=corridors,
-            entry_room=entry_room,
-            exit_room=exit_room,
-            boss_room=boss_room,
+            rooms=bsp.rooms,
+            entry_pos=entry_pos,
+            exit_pos=exit_pos,
             item_positions=item_positions,
             encounter_positions=encounter_positions,
-            config=config,
+            boss_pos=boss_pos,
+            min_level=min_level,
+            max_level=max_level,
+            is_boss_floor=is_boss_floor,
+            bsp=bsp,
+            special_rooms=special_rooms_data
         )
 
-    def _create_empty_grid(
-        self, width: int, height: int
-    ) -> list[list[str]]:
-        """Create a grid filled with walls."""
-        return [
-            [self.WALL_CHAR for _ in range(width)]
-            for _ in range(height)
+    def _create_special_room_data(self, bsp: BSPTree) -> list[SpecialRoomData]:
+        """Create SpecialRoomData for all special rooms."""
+        special_rooms = []
+
+        for room_type in [RoomType.TREASURE, RoomType.HEALING, RoomType.TRAP]:
+            for room in bsp.get_rooms_by_type(room_type):
+                pos = self._get_room_position(room, bsp.rng)
+
+                items = []
+                if room_type == RoomType.TREASURE:
+                    items = bsp.rng.choices(
+                        self.config.treasure_room_items,
+                        k=self.config.treasure_room_item_count
+                    )
+
+                special_rooms.append(SpecialRoomData(
+                    room=room,
+                    room_type=room_type,
+                    position=pos,
+                    items=items
+                ))
+
+        return special_rooms
+
+    def _get_room_position(self, room: Optional[Room], rng: random.Random) -> tuple[int, int]:
+        """Get a safe position within a room."""
+        if not room:
+            return (self.config.width // 2, self.config.height // 2)
+
+        r = room.rect
+        x = r.x + r.width // 2
+        y = r.y + r.height // 2
+
+        if r.width > 2:
+            x = rng.randint(r.x + 1, r.x + r.width - 2)
+        if r.height > 2:
+            y = rng.randint(r.y + 1, r.y + r.height - 2)
+
+        return (x, y)
+
+    def _place_items(self, bsp: BSPTree, entry_pos: tuple[int, int],
+                     exit_pos: Optional[tuple[int, int]],
+                     boss_pos: Optional[tuple[int, int]],
+                     special_rooms: list[SpecialRoomData]) -> list[tuple[int, int, str]]:
+        """Place items randomly in the dungeon."""
+        items = []
+        excluded = {entry_pos}
+        if exit_pos:
+            excluded.add(exit_pos)
+        if boss_pos:
+            excluded.add(boss_pos)
+
+        for sr in special_rooms:
+            excluded.add(sr.position)
+
+        special_room_set = {sr.room for sr in special_rooms}
+
+        num_items = bsp.rng.randint(
+            self.config.items_per_floor_min,
+            self.config.items_per_floor_max
+        )
+
+        available_rooms = [
+            r for r in bsp.rooms
+            if r.rect.width > 2 and r.rect.height > 2
+            and r not in special_room_set
+            and r.room_type == RoomType.NORMAL
         ]
 
-    def _carve_room(self, grid: list[list[str]], room: Room) -> None:
-        """Carve out a room in the grid."""
-        for y in range(room.rect.y, room.rect.bottom):
-            for x in range(room.rect.x, room.rect.right):
-                if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
-                    grid[y][x] = self.FLOOR_CHAR
+        for _ in range(num_items):
+            if not available_rooms:
+                break
 
-    def _carve_corridor(
-        self, grid: list[list[str]], corridor: Corridor
-    ) -> None:
-        """Carve out a corridor in the grid."""
-        for x, y in corridor.points:
-            if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
-                grid[y][x] = self.CORRIDOR_CHAR
-                for dy in [-1, 0, 1]:
-                    for dx in [-1, 0, 1]:
-                        ny, nx = y + dy, x + dx
-                        if (
-                            0 <= ny < len(grid) and
-                            0 <= nx < len(grid[0]) and
-                            grid[ny][nx] == self.WALL_CHAR
-                        ):
-                            pass
+            room = bsp.rng.choice(available_rooms)
+            r = room.rect
 
-    def _assign_special_rooms(
-        self,
-        rooms: list[Room],
-        config: FloorConfig,
-        rng: random.Random
-    ) -> tuple[Room, Optional[Room], Optional[Room]]:
-        """Assign entry, exit, and boss rooms."""
-        if len(rooms) < 2:
-            entry_room = rooms[0]
-            entry_room.is_entry = True
-            return entry_room, None, None
-
-        rooms_by_distance = sorted(
-            rooms,
-            key=lambda r: (r.rect.x ** 2 + r.rect.y ** 2)
-        )
-
-        entry_room = rooms_by_distance[0]
-        entry_room.is_entry = True
-
-        exit_room: Optional[Room] = None
-        boss_room: Optional[Room] = None
-
-        if config.is_boss_floor:
-            farthest = rooms_by_distance[-1]
-            farthest.is_boss_room = True
-            boss_room = farthest
-        else:
-            farthest = rooms_by_distance[-1]
-            farthest.is_exit = True
-            exit_room = farthest
-
-        return entry_room, exit_room, boss_room
-
-    def _place_items(
-        self,
-        grid: list[list[str]],
-        rooms: list[Room],
-        count: int,
-        rng: random.Random
-    ) -> list[tuple[int, int]]:
-        """Place items randomly in rooms."""
-        positions = []
-        valid_rooms = [r for r in rooms if not r.is_entry and not r.is_boss_room]
-
-        if not valid_rooms:
-            valid_rooms = rooms
-
-        for _ in range(count):
-            room = rng.choice(valid_rooms)
             for _ in range(10):
-                x = rng.randint(room.rect.x + 1, room.rect.right - 2)
-                y = rng.randint(room.rect.y + 1, room.rect.bottom - 2)
-                if (
-                    0 <= y < len(grid) and
-                    0 <= x < len(grid[0]) and
-                    grid[y][x] == self.FLOOR_CHAR and
-                    (x, y) not in positions
-                ):
-                    positions.append((x, y))
+                x = bsp.rng.randint(r.x + 1, r.x + r.width - 2)
+                y = bsp.rng.randint(r.y + 1, r.y + r.height - 2)
+
+                if (x, y) not in excluded:
+                    item_name = bsp.rng.choices(
+                        self.config.item_pool,
+                        weights=self.config.item_weights
+                    )[0]
+                    items.append((x, y, item_name))
+                    excluded.add((x, y))
                     break
 
-        return positions
+        return items
 
-    def _place_encounter_areas(
-        self,
-        grid: list[list[str]],
-        rooms: list[Room],
-        entry_room: Room,
-        exit_room: Optional[Room],
-        boss_room: Optional[Room],
-        rng: random.Random
-    ) -> list[tuple[int, int]]:
-        """Place encounter areas in corridors and rooms."""
-        positions = []
-        skip_rooms = {entry_room}
-        if exit_room:
-            skip_rooms.add(exit_room)
-        if boss_room:
-            skip_rooms.add(boss_room)
+    def _place_encounters(self, bsp: BSPTree,
+                          entry_pos: tuple[int, int],
+                          special_rooms: list[SpecialRoomData]) -> list[tuple[int, int]]:
+        """Place encounter zones (high grass equivalent)."""
+        encounters = []
+        grid = bsp.to_grid()
 
-        for room in rooms:
-            if room in skip_rooms:
-                continue
-            for y in range(room.rect.y + 1, room.rect.bottom - 1):
-                for x in range(room.rect.x + 1, room.rect.right - 1):
-                    if (
-                        0 <= y < len(grid) and
-                        0 <= x < len(grid[0]) and
-                        grid[y][x] == self.FLOOR_CHAR
-                    ):
-                        positions.append((x, y))
+        special_rects = [sr.room.rect for sr in special_rooms]
 
-        return positions
+        def in_special_room(x: int, y: int) -> bool:
+            return any(rect.contains(x, y) for rect in special_rects)
 
-    def _create_fallback_rooms(
-        self, config: FloorConfig, rng: random.Random
-    ) -> list[Room]:
-        """Create fallback rooms if BSP fails."""
-        rooms = []
-        room_size = 8
-        margin = 3
+        for y in range(len(grid)):
+            for x in range(len(grid[0])):
+                if grid[y][x] == '.' and (x, y) != entry_pos:
+                    if not in_special_room(x, y):
+                        if bsp.rng.random() < self.config.encounter_rate:
+                            encounters.append((x, y))
 
-        entry_x = margin
-        entry_y = margin
-        rooms.append(Room(
-            Rect(entry_x, entry_y, room_size, room_size),
-            is_entry=True
-        ))
+        return encounters
 
-        exit_x = config.width - room_size - margin
-        exit_y = config.height - room_size - margin
-        if config.is_boss_floor:
-            rooms.append(Room(
-                Rect(exit_x, exit_y, room_size + 2, room_size + 2),
-                is_boss_room=True
-            ))
-        else:
-            rooms.append(Room(
-                Rect(exit_x, exit_y, room_size, room_size),
-                is_exit=True
-            ))
+    def _validate_connectivity(self):
+        """Ensure all floors are properly connected."""
+        for i, floor in enumerate(self.floors):
+            if not floor.bsp.is_connected():
+                raise ValueError(f"Floor {i} has isolated rooms")
 
-        mid_x = config.width // 2 - room_size // 2
-        mid_y = config.height // 2 - room_size // 2
-        rooms.append(Room(Rect(mid_x, mid_y, room_size, room_size)))
+            if i < len(self.floors) - 1 and floor.exit_pos is None:
+                raise ValueError(f"Non-boss floor {i} missing exit")
 
-        return rooms
+            if floor.is_boss_floor and floor.boss_pos is None:
+                raise ValueError(f"Boss floor {i} missing boss position")
 
-    def _create_fallback_corridors(
-        self, rooms: list[Room], rng: random.Random
-    ) -> list[Corridor]:
-        """Create corridors connecting fallback rooms."""
-        corridors = []
+    def get_floor(self, floor_num: int) -> Optional[FloorLayout]:
+        """Get a specific floor by number."""
+        if 0 <= floor_num < len(self.floors):
+            return self.floors[floor_num]
+        return None
 
-        for i in range(len(rooms) - 1):
-            x1, y1 = rooms[i].center
-            x2, y2 = rooms[i + 1].center
+    def get_save_data(self) -> dict:
+        """Get data to save for reproducibility."""
+        return {
+            "seed": self.seed,
+            "config": {
+                "width": self.config.width,
+                "height": self.config.height,
+                "num_floors": self.config.num_floors,
+                "base_level": self.config.base_level,
+                "level_increment": self.config.level_increment,
+            }
+        }
 
-            points = []
-            for x in range(min(x1, x2), max(x1, x2) + 1):
-                points.append((x, y1))
-            for y in range(min(y1, y2), max(y1, y2) + 1):
-                points.append((x2, y))
-
-            corridors.append(Corridor(points))
-
-        return corridors
-
-    def create_dungeon_config(
-        self,
-        total_floors: int,
-        base_width: int = 60,
-        base_height: int = 40,
-        base_min_level: int = 100,
-        base_max_level: int = 150,
-        available_poketes: Optional[list[str]] = None
-    ) -> list[FloorConfig]:
-        """Create configuration for all floors of a dungeon."""
-        if available_poketes is None:
-            available_poketes = [
-                "steini", "bato", "lilstone", "gobost", "rollator"
-            ]
-
-        configs = []
-        for floor_num in range(1, total_floors + 1):
-            difficulty_mult = 1.0 + (floor_num - 1) * 0.2
-
-            config = FloorConfig(
-                floor_number=floor_num,
-                width=base_width + floor_num * 5,
-                height=base_height + floor_num * 3,
-                min_enemy_level=int(base_min_level * difficulty_mult),
-                max_enemy_level=int(base_max_level * difficulty_mult),
-                item_count=max(1, 5 - floor_num // 2),
-                encounter_rate=0.08 + floor_num * 0.02,
-                is_boss_floor=(floor_num == total_floors),
-                available_poketes=available_poketes,
-            )
-            configs.append(config)
-
-        return configs
+    @classmethod
+    def from_save_data(cls, data: dict) -> "CaveGenerator":
+        """Recreate a generator from saved data."""
+        config = CaveConfig(
+            seed=data["seed"],
+            **data.get("config", {})
+        )
+        generator = cls(config)
+        generator.generate()
+        return generator

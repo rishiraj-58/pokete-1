@@ -1,23 +1,28 @@
-"""Cave generator module for procedurally generated dungeons."""
-
-from .generator import CaveGenerator
-from .dungeon_map import DungeonMap, DungeonFloor
-from .doors import DungeonDoor, FloorExitDoor, FloorEntryDoor, BossRoomDoor
-from .dungeon_manager import DungeonManager, dungeon_manager
-from .dungeon_encounters import DungeonEncounterArea, DungeonItemPickup
+"""Cave generator module for procedural dungeon generation."""
+from .generator import CaveGenerator, CaveConfig, SpecialRoomData
+from .cave_map import (
+    CaveMap, CaveFloorManager, CaveDoor,
+    TreasureRoomTrigger, HealingRoomTrigger, TrapRoomTrigger,
+    BossTrigger, cave_floor_manager
+)
+from .bsp import BSPNode, BSPTree, RoomType, SpecialRoomConfig
 from .boss_provider import BossProvider
 
 __all__ = [
     "CaveGenerator",
-    "DungeonMap",
-    "DungeonFloor",
-    "DungeonDoor",
-    "FloorExitDoor",
-    "FloorEntryDoor",
-    "BossRoomDoor",
-    "DungeonManager",
-    "dungeon_manager",
-    "DungeonEncounterArea",
-    "DungeonItemPickup",
+    "CaveConfig",
+    "CaveMap",
+    "CaveFloorManager",
+    "CaveDoor",
+    "BSPNode",
+    "BSPTree",
+    "RoomType",
+    "SpecialRoomConfig",
+    "SpecialRoomData",
+    "TreasureRoomTrigger",
+    "HealingRoomTrigger",
+    "TrapRoomTrigger",
+    "BossTrigger",
     "BossProvider",
+    "cave_floor_manager",
 ]

@@ -1,1 +1,1 @@
-"""Test package."""
+from .pokete import *
