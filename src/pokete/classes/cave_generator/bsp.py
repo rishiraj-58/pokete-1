@@ -12,9 +12,6 @@ class RoomType(Enum):
     TREASURE = auto()
     HEALING = auto()
     TRAP = auto()
-    ENTRY = auto()
-    EXIT = auto()
-    BOSS = auto()
 
 
 @dataclass
@@ -46,18 +43,14 @@ class Rect:
             self.y2 <= other.y or other.y2 <= self.y
         )
 
-    @property
-    def area(self) -> int:
-        return self.width * self.height
-
 
 class Room:
     """A room within the dungeon."""
 
     def __init__(self, rect: Rect, room_type: RoomType = RoomType.NORMAL):
         self.rect = rect
-        self.room_type = room_type
         self.connected_to: list["Room"] = []
+        self.room_type = room_type
         self._id = id(self)
 
     def __hash__(self):
@@ -76,7 +69,7 @@ class Room:
 
     @property
     def is_special(self) -> bool:
-        return self.room_type not in (RoomType.NORMAL, RoomType.ENTRY, RoomType.EXIT)
+        return self.room_type != RoomType.NORMAL
 
 
 class BSPNode:
@@ -187,15 +180,14 @@ class SpecialRoomConfig:
     """Configuration for special room generation."""
     treasure_chance: float = 0.15
     healing_chance: float = 0.10
-    trap_chance: float = 0.12
-    min_rooms_for_special: int = 4
+    trap_chance: float = 0.10
 
 
 class BSPTree:
     """A complete BSP tree for dungeon generation."""
 
     def __init__(self, width: int, height: int, seed: Optional[int] = None,
-                 special_config: Optional[SpecialRoomConfig] = None):
+                 special_room_config: Optional[SpecialRoomConfig] = None):
         self.width = width
         self.height = height
         self.seed = seed if seed is not None else random.randint(0, 2**32 - 1)
@@ -203,20 +195,15 @@ class BSPTree:
         self.root = BSPNode(Rect(0, 0, width, height))
         self.rooms: list[Room] = []
         self.corridors: list[tuple[tuple[int, int], tuple[int, int]]] = []
-        self.special_config = special_config or SpecialRoomConfig()
-        self.special_rooms: dict[RoomType, list[Room]] = {
-            RoomType.TREASURE: [],
-            RoomType.HEALING: [],
-            RoomType.TRAP: [],
-        }
+        self.special_config = special_room_config or SpecialRoomConfig()
 
     def generate(self, max_depth: int = 4, min_size: int = 8,
                  min_room_size: int = 4) -> "BSPTree":
         """Generate the complete dungeon layout."""
         self._split_recursive(self.root, 0, max_depth, min_size)
         self._create_rooms(min_room_size)
-        self._connect_rooms()
         self._assign_special_rooms()
+        self._connect_rooms()
         return self
 
     def _split_recursive(self, node: BSPNode, depth: int,
@@ -235,6 +222,28 @@ class BSPTree:
             room = leaf.create_room(self.rng, min_room_size)
             if room:
                 self.rooms.append(room)
+
+    def _assign_special_rooms(self):
+        """Assign special room types to some rooms."""
+        if len(self.rooms) < 3:
+            return
+
+        entry_room, exit_room = self.get_furthest_rooms()
+        excluded = {entry_room, exit_room}
+
+        available = [r for r in self.rooms if r not in excluded]
+        self.rng.shuffle(available)
+
+        for room in available:
+            roll = self.rng.random()
+            if roll < self.special_config.treasure_chance:
+                room.room_type = RoomType.TREASURE
+            elif roll < self.special_config.treasure_chance + self.special_config.healing_chance:
+                room.room_type = RoomType.HEALING
+            elif roll < (self.special_config.treasure_chance +
+                        self.special_config.healing_chance +
+                        self.special_config.trap_chance):
+                room.room_type = RoomType.TRAP
 
     def _connect_rooms(self):
         """Connect all rooms with corridors."""
@@ -268,38 +277,6 @@ class BSPTree:
         else:
             self.corridors.append(((x1, y1), (x1, y2)))
             self.corridors.append(((x1, y2), (x2, y2)))
-
-    def _assign_special_rooms(self):
-        """Assign special room types to eligible rooms."""
-        if len(self.rooms) < self.special_config.min_rooms_for_special:
-            return
-
-        entry_room, exit_room = self.get_furthest_rooms()
-        reserved = {entry_room, exit_room}
-
-        eligible = [r for r in self.rooms if r not in reserved]
-
-        eligible.sort(key=lambda r: r.rect.area, reverse=True)
-
-        special_assignments = [
-            (RoomType.TREASURE, self.special_config.treasure_chance),
-            (RoomType.HEALING, self.special_config.healing_chance),
-            (RoomType.TRAP, self.special_config.trap_chance),
-        ]
-
-        for room in eligible:
-            if room.room_type != RoomType.NORMAL:
-                continue
-
-            for room_type, chance in special_assignments:
-                if self.rng.random() < chance:
-                    room.room_type = room_type
-                    self.special_rooms[room_type].append(room)
-                    break
-
-    def get_rooms_by_type(self, room_type: RoomType) -> list[Room]:
-        """Get all rooms of a specific type."""
-        return [r for r in self.rooms if r.room_type == room_type]
 
     def to_grid(self) -> list[list[str]]:
         """Convert the dungeon to a 2D character grid."""
@@ -377,3 +354,11 @@ class BSPTree:
     def has_isolated_rooms(self) -> bool:
         """Check if there are any isolated (unreachable) rooms."""
         return not self.is_connected()
+
+    def get_rooms_by_type(self, room_type: RoomType) -> list[Room]:
+        """Get all rooms of a specific type."""
+        return [r for r in self.rooms if r.room_type == room_type]
+
+    def get_special_rooms(self) -> list[Room]:
+        """Get all special (non-normal) rooms."""
+        return [r for r in self.rooms if r.is_special]

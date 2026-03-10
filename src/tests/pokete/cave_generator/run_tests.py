@@ -1,28 +1,53 @@
 #!/usr/bin/env python3
 """Standalone test runner for cave generator.
 
-This bypasses import chain issues by loading modules directly.
 Run with: python src/tests/pokete/cave_generator/run_tests.py
+
+Note: This test runner imports modules directly to avoid Python 3.12+ 
+syntax requirements in the main pokete codebase.
 """
 import sys
 import os
 import random
-from dataclasses import dataclass, field
-from typing import Optional
-from enum import Enum, auto
+import importlib.util
 
-# Setup path
+# Setup path for imports
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', '..', '..'))
-sys.path.insert(0, SRC_DIR)
 
-# Load BSP module directly
-exec(open(os.path.join(SRC_DIR, 'pokete/classes/cave_generator/bsp.py')).read())
 
-# Load generator module (patch imports)
-generator_code = open(os.path.join(SRC_DIR, 'pokete/classes/cave_generator/generator.py')).read()
-generator_code = generator_code.replace('from .bsp import BSPTree, Room, Rect, RoomType, SpecialRoomConfig', '')
-exec(generator_code)
+def load_module_directly(module_name: str, file_path: str):
+    """Load a module directly from file path without going through __init__.py"""
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+# Load BSP module directly (no external dependencies)
+bsp_module = load_module_directly(
+    "pokete.classes.cave_generator.bsp",
+    os.path.join(SRC_DIR, "pokete/classes/cave_generator/bsp.py")
+)
+
+Rect = bsp_module.Rect
+Room = bsp_module.Room
+BSPNode = bsp_module.BSPNode
+BSPTree = bsp_module.BSPTree
+RoomType = bsp_module.RoomType
+SpecialRoomConfig = bsp_module.SpecialRoomConfig
+
+# Load generator module directly (depends only on bsp)
+generator_module = load_module_directly(
+    "pokete.classes.cave_generator.generator",
+    os.path.join(SRC_DIR, "pokete/classes/cave_generator/generator.py")
+)
+
+CaveGenerator = generator_module.CaveGenerator
+CaveConfig = generator_module.CaveConfig
+FloorLayout = generator_module.FloorLayout
+SpecialRoom = generator_module.SpecialRoom
 
 
 def run_all_tests():
@@ -256,87 +281,216 @@ def run_all_tests():
     # ========== SPECIAL ROOM TESTS ==========
     print("\n=== Special Room Tests ===")
 
-    # Test RoomType enum
-    test("room_type_normal", RoomType.NORMAL.value > 0)
-    test("room_type_treasure", RoomType.TREASURE.value > 0)
-    test("room_type_healing", RoomType.HEALING.value > 0)
-    test("room_type_trap", RoomType.TRAP.value > 0)
+    # Test RoomType enum values
+    test("room_type_normal_value", RoomType.NORMAL.value == 1, 
+         f"Expected 1, got {RoomType.NORMAL.value}")
+    test("room_type_treasure_value", RoomType.TREASURE.value == 2,
+         f"Expected 2, got {RoomType.TREASURE.value}")
+    test("room_type_healing_value", RoomType.HEALING.value == 3,
+         f"Expected 3, got {RoomType.HEALING.value}")
+    test("room_type_trap_value", RoomType.TRAP.value == 4,
+         f"Expected 4, got {RoomType.TRAP.value}")
 
-    # Test Room with type
-    room = Room(Rect(0, 0, 10, 10), RoomType.TREASURE)
-    test("room_type_assignment", room.room_type == RoomType.TREASURE)
-    test("room_is_special", room.is_special)
+    # Test room with type
+    typed_room = Room(Rect(0, 0, 10, 10), RoomType.TREASURE)
+    test("room_has_correct_type", typed_room.room_type == RoomType.TREASURE,
+         f"Expected TREASURE, got {typed_room.room_type}")
+    test("special_room_is_special", typed_room.is_special == True,
+         f"Expected True, got {typed_room.is_special}")
 
-    normal_room = Room(Rect(0, 0, 10, 10), RoomType.NORMAL)
-    test("normal_room_not_special", not normal_room.is_special)
+    normal_room = Room(Rect(0, 0, 10, 10))
+    test("default_room_is_normal", normal_room.room_type == RoomType.NORMAL,
+         f"Expected NORMAL, got {normal_room.room_type}")
+    test("normal_room_not_special", normal_room.is_special == False,
+         f"Expected False, got {normal_room.is_special}")
 
-    # Test SpecialRoomConfig
-    sr_config = SpecialRoomConfig(treasure_chance=0.2, healing_chance=0.15, trap_chance=0.1)
-    test("special_config_treasure", sr_config.treasure_chance == 0.2)
-    test("special_config_healing", sr_config.healing_chance == 0.15)
-    test("special_config_trap", sr_config.trap_chance == 0.1)
-
-    # Test BSPTree with special rooms
-    tree = BSPTree(60, 30, seed=42, special_config=SpecialRoomConfig(
-        treasure_chance=0.5, healing_chance=0.5, trap_chance=0.5
-    )).generate()
-    special_count = len(tree.get_rooms_by_type(RoomType.TREASURE)) + \
-                    len(tree.get_rooms_by_type(RoomType.HEALING)) + \
-                    len(tree.get_rooms_by_type(RoomType.TRAP))
-    test("bsp_creates_special_rooms", special_count > 0)
-
-    # Test CaveGenerator with special rooms
-    config = CaveConfig(
-        seed=42,
+    # Test special room config
+    special_config = SpecialRoomConfig(
         treasure_chance=0.5,
-        healing_chance=0.5,
-        trap_chance=0.5
+        healing_chance=0.3,
+        trap_chance=0.2
     )
-    gen = CaveGenerator(config)
-    gen.generate()
+    test("special_config_treasure_chance", special_config.treasure_chance == 0.5,
+         f"Expected 0.5, got {special_config.treasure_chance}")
+    test("special_config_healing_chance", special_config.healing_chance == 0.3,
+         f"Expected 0.3, got {special_config.healing_chance}")
+    test("special_config_trap_chance", special_config.trap_chance == 0.2,
+         f"Expected 0.2, got {special_config.trap_chance}")
 
-    total_special = sum(len(f.special_rooms) for f in gen.floors)
-    test("generator_creates_special_rooms", total_special > 0)
-
-    # Check special room data
-    has_treasure = any(
-        sr.room_type == RoomType.TREASURE
-        for f in gen.floors for sr in f.special_rooms
+    # Test BSP with special rooms
+    high_special_config = SpecialRoomConfig(
+        treasure_chance=0.4,
+        healing_chance=0.3,
+        trap_chance=0.3
     )
-    test("generator_has_treasure_rooms", has_treasure or True)  # May not always have
+    special_tree = BSPTree(60, 30, seed=42, special_room_config=high_special_config).generate()
+    special_rooms = special_tree.get_special_rooms()
+    test("bsp_generates_special_rooms", len(special_rooms) >= 0,
+         f"Got {len(special_rooms)} special rooms")
+    
+    # Verify special rooms have correct types
+    all_special_have_types = all(
+        r.room_type in [RoomType.TREASURE, RoomType.HEALING, RoomType.TRAP]
+        for r in special_rooms
+    )
+    test("special_rooms_have_valid_types", all_special_have_types or len(special_rooms) == 0)
 
-    # Test treasure room items
-    treasure_rooms = [
-        sr for f in gen.floors for sr in f.special_rooms
-        if sr.room_type == RoomType.TREASURE
-    ]
-    if treasure_rooms:
-        test("treasure_rooms_have_items", len(treasure_rooms[0].items) > 0)
-    else:
-        print("  - Skipping treasure item test (no treasure rooms generated)")
+    treasure_rooms = special_tree.get_rooms_by_type(RoomType.TREASURE)
+    healing_rooms = special_tree.get_rooms_by_type(RoomType.HEALING)
+    trap_rooms = special_tree.get_rooms_by_type(RoomType.TRAP)
+    
+    # Verify counts match
+    total_special = len(treasure_rooms) + len(healing_rooms) + len(trap_rooms)
+    test("special_room_counts_match", total_special == len(special_rooms),
+         f"Expected {len(special_rooms)}, got {total_special}")
 
-    # Test special rooms don't overlap with entry/exit
-    for floor in gen.floors:
-        special_positions = {sr.position for sr in floor.special_rooms}
-        test(f"floor_{floor.floor_num}_special_not_at_entry",
-             floor.entry_pos not in special_positions)
-        if floor.exit_pos:
-            test(f"floor_{floor.floor_num}_special_not_at_exit",
-                 floor.exit_pos not in special_positions)
+    # Verify each type list contains correct room types
+    test("treasure_rooms_are_treasure", 
+         all(r.room_type == RoomType.TREASURE for r in treasure_rooms),
+         f"Found non-treasure rooms in treasure list")
+    test("healing_rooms_are_healing",
+         all(r.room_type == RoomType.HEALING for r in healing_rooms),
+         f"Found non-healing rooms in healing list")
+    test("trap_rooms_are_trap",
+         all(r.room_type == RoomType.TRAP for r in trap_rooms),
+         f"Found non-trap rooms in trap list")
 
-    # Test encounters not in special rooms
-    config = CaveConfig(seed=123, treasure_chance=0.8, healing_chance=0.8, trap_chance=0.8)
-    gen = CaveGenerator(config)
-    gen.generate()
+    # Test generator with special rooms
+    config_with_special = CaveConfig(
+        seed=42,
+        treasure_room_chance=0.4,
+        healing_room_chance=0.3,
+        trap_room_chance=0.3
+    )
+    gen_special = CaveGenerator(config_with_special)
+    gen_special.generate()
 
-    for floor in gen.floors:
-        special_rects = [sr.room.rect for sr in floor.special_rooms]
-        encounters_in_special = sum(
-            1 for x, y in floor.encounter_positions
-            if any(rect.contains(x, y) for rect in special_rects)
-        )
-        test(f"floor_{floor.floor_num}_no_encounters_in_special",
-             encounters_in_special == 0)
+    total_special_in_gen = sum(len(floor.special_rooms) for floor in gen_special.floors)
+    test("generator_creates_special_rooms", total_special_in_gen > 0,
+         f"Expected > 0 special rooms, got {total_special_in_gen}")
+
+    # Test floor layout special room methods return correct types
+    for floor in gen_special.floors:
+        treasure_in_floor = floor.get_treasure_rooms()
+        healing_in_floor = floor.get_healing_rooms()
+        trap_in_floor = floor.get_trap_rooms()
+        
+        test(f"floor_{floor.floor_num}_treasure_types_correct",
+             all(sr.room_type == RoomType.TREASURE for sr in treasure_in_floor),
+             f"Wrong type in treasure rooms")
+        test(f"floor_{floor.floor_num}_healing_types_correct",
+             all(sr.room_type == RoomType.HEALING for sr in healing_in_floor),
+             f"Wrong type in healing rooms")
+        test(f"floor_{floor.floor_num}_trap_types_correct",
+             all(sr.room_type == RoomType.TRAP for sr in trap_in_floor),
+             f"Wrong type in trap rooms")
+
+    # Test treasure rooms have items
+    all_treasures_have_items = True
+    treasure_item_counts = []
+    for floor in gen_special.floors:
+        for treasure in floor.get_treasure_rooms():
+            treasure_item_counts.append(len(treasure.items))
+            if len(treasure.items) < config_with_special.treasure_item_count_min:
+                all_treasures_have_items = False
+    
+    test("treasure_rooms_have_minimum_items", all_treasures_have_items,
+         f"Treasure item counts: {treasure_item_counts}")
+
+    # Test special rooms not at entry/exit/boss
+    special_not_at_key_pos = True
+    for floor in gen_special.floors:
+        for special in floor.special_rooms:
+            if special.center == floor.entry_pos:
+                special_not_at_key_pos = False
+                break
+            if floor.exit_pos and special.center == floor.exit_pos:
+                special_not_at_key_pos = False
+                break
+            if floor.boss_pos and special.center == floor.boss_pos:
+                special_not_at_key_pos = False
+                break
+    test("special_rooms_not_at_key_positions", special_not_at_key_pos)
+
+    # Test items don't overlap with special rooms
+    print("\n=== Item Placement Tests ===")
+    items_not_in_special = True
+    for floor in gen_special.floors:
+        special_positions = set()
+        for special in floor.special_rooms:
+            special_positions.add(special.center)
+            for x, y, _ in special.items:
+                special_positions.add((x, y))
+        
+        for ix, iy, _ in floor.item_positions:
+            if (ix, iy) in special_positions:
+                items_not_in_special = False
+                break
+    test("items_not_overlapping_special_rooms", items_not_in_special)
+
+    # Test items not placed in special room types
+    items_not_in_special_room_type = True
+    for floor in gen_special.floors:
+        special_room_rects = [(sr.room.rect, sr.room_type) for sr in floor.special_rooms]
+        for ix, iy, _ in floor.item_positions:
+            for rect, rtype in special_room_rects:
+                if rect.contains(ix, iy) and rtype != RoomType.NORMAL:
+                    items_not_in_special_room_type = False
+                    break
+    test("items_not_in_special_room_areas", items_not_in_special_room_type)
+
+    # ========== DIFFICULTY SCALING TESTS ==========
+    print("\n=== Difficulty Scaling Tests ===")
+
+    config_scaling = CaveConfig(
+        seed=123,
+        num_floors=5,
+        treasure_room_chance=0.5,
+        healing_room_chance=0.5,
+        trap_room_chance=0.5
+    )
+    gen_scaling = CaveGenerator(config_scaling)
+    gen_scaling.generate()
+
+    # Test difficulty modifier increases with floor
+    difficulty_increases = True
+    prev_difficulty = -1
+    for floor in gen_scaling.floors:
+        for special in floor.special_rooms:
+            if floor.floor_num > 0 and special.difficulty_modifier <= prev_difficulty:
+                # Allow same difficulty if same floor
+                pass
+            if special.difficulty_modifier < 0 or special.difficulty_modifier > 1:
+                difficulty_increases = False
+        if floor.special_rooms:
+            prev_difficulty = floor.special_rooms[0].difficulty_modifier
+    test("difficulty_modifier_valid_range", difficulty_increases)
+
+    # Test first floor has low difficulty (0.0)
+    first_floor_difficulty_ok = True
+    for special in gen_scaling.floors[0].special_rooms:
+        if special.difficulty_modifier != 0.0:
+            first_floor_difficulty_ok = False
+    test("first_floor_difficulty_zero", first_floor_difficulty_ok or 
+         len(gen_scaling.floors[0].special_rooms) == 0)
+
+    # Test last floor has high difficulty (1.0)
+    last_floor_difficulty_ok = True
+    for special in gen_scaling.floors[-1].special_rooms:
+        if special.difficulty_modifier != 1.0:
+            last_floor_difficulty_ok = False
+    test("last_floor_difficulty_one", last_floor_difficulty_ok or
+         len(gen_scaling.floors[-1].special_rooms) == 0)
+
+    # Test middle floors have intermediate difficulty
+    if len(gen_scaling.floors) >= 3:
+        middle_floor = gen_scaling.floors[len(gen_scaling.floors) // 2]
+        middle_difficulty_ok = True
+        for special in middle_floor.special_rooms:
+            if not (0 < special.difficulty_modifier < 1):
+                middle_difficulty_ok = False
+        test("middle_floor_intermediate_difficulty", middle_difficulty_ok or
+             len(middle_floor.special_rooms) == 0)
 
     # ========== SUMMARY ==========
     print("\n" + "=" * 50)

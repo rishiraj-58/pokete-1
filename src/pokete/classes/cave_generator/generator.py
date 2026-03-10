@@ -36,24 +36,36 @@ class CaveConfig:
     item_weights: list[float] = field(default_factory=lambda: [
         10.0, 3.0, 1.0, 5.0, 2.0, 0.5
     ])
-    treasure_room_items: list[str] = field(default_factory=lambda: [
-        "hyperball", "super_potion", "treat", "ap_potion"
+    treasure_room_chance: float = 0.15
+    healing_room_chance: float = 0.10
+    trap_room_chance: float = 0.10
+    treasure_items_common: list[str] = field(default_factory=lambda: [
+        "poketeball", "healing_potion"
     ])
-    treasure_room_item_count: int = 3
-    treasure_chance: float = 0.15
-    healing_chance: float = 0.10
-    trap_chance: float = 0.12
-    trap_damage_percent: float = 0.25
-    healing_percent: float = 0.5
+    treasure_items_uncommon: list[str] = field(default_factory=lambda: [
+        "superball", "super_potion"
+    ])
+    treasure_items_rare: list[str] = field(default_factory=lambda: [
+        "hyperball", "treat"
+    ])
+    treasure_item_count_min: int = 2
+    treasure_item_count_max: int = 4
+    trap_damage_base: float = 0.15
+    trap_damage_per_floor: float = 0.05
+    trap_damage_max: float = 0.50
+    healing_base: float = 0.75
+    healing_reduction_per_floor: float = 0.10
+    healing_min: float = 0.25
 
 
 @dataclass
-class SpecialRoomData:
-    """Data for a special room."""
+class SpecialRoom:
+    """Information about a special room."""
     room: Room
     room_type: RoomType
-    position: tuple[int, int]
-    items: list[str] = field(default_factory=list)
+    center: tuple[int, int]
+    items: list[tuple[int, int, str]] = field(default_factory=list)
+    difficulty_modifier: float = 1.0  # Increases with floor depth
 
 
 @dataclass
@@ -71,7 +83,7 @@ class FloorLayout:
     max_level: int
     is_boss_floor: bool
     bsp: BSPTree
-    special_rooms: list[SpecialRoomData] = field(default_factory=list)
+    special_rooms: list[SpecialRoom] = field(default_factory=list)
 
     @property
     def width(self) -> int:
@@ -81,9 +93,14 @@ class FloorLayout:
     def height(self) -> int:
         return len(self.grid)
 
-    def get_special_rooms_by_type(self, room_type: RoomType) -> list[SpecialRoomData]:
-        """Get all special rooms of a specific type."""
-        return [r for r in self.special_rooms if r.room_type == room_type]
+    def get_treasure_rooms(self) -> list[SpecialRoom]:
+        return [r for r in self.special_rooms if r.room_type == RoomType.TREASURE]
+
+    def get_healing_rooms(self) -> list[SpecialRoom]:
+        return [r for r in self.special_rooms if r.room_type == RoomType.HEALING]
+
+    def get_trap_rooms(self) -> list[SpecialRoom]:
+        return [r for r in self.special_rooms if r.room_type == RoomType.TRAP]
 
 
 class CaveGenerator:
@@ -112,16 +129,16 @@ class CaveGenerator:
         floor_seed = self.seed + floor_num * 1000
 
         special_config = SpecialRoomConfig(
-            treasure_chance=self.config.treasure_chance,
-            healing_chance=self.config.healing_chance,
-            trap_chance=self.config.trap_chance,
+            treasure_chance=self.config.treasure_room_chance,
+            healing_chance=self.config.healing_room_chance,
+            trap_chance=self.config.trap_room_chance
         )
 
         bsp = BSPTree(
             self.config.width,
             self.config.height,
             seed=floor_seed,
-            special_config=special_config
+            special_room_config=special_config
         ).generate(
             max_depth=self.config.max_depth,
             min_size=self.config.min_partition_size,
@@ -134,11 +151,6 @@ class CaveGenerator:
         if not entry_room:
             entry_room = bsp.rooms[0] if bsp.rooms else None
 
-        if entry_room:
-            entry_room.room_type = RoomType.ENTRY
-        if exit_room and exit_room != entry_room:
-            exit_room.room_type = RoomType.EXIT if not is_boss_floor else RoomType.BOSS
-
         entry_pos = self._get_room_position(entry_room, bsp.rng)
         exit_pos = None
         boss_pos = None
@@ -148,10 +160,10 @@ class CaveGenerator:
         else:
             exit_pos = self._get_room_position(exit_room, bsp.rng) if exit_room else None
 
-        special_rooms_data = self._create_special_room_data(bsp)
-
-        item_positions = self._place_items(bsp, entry_pos, exit_pos, boss_pos, special_rooms_data)
-        encounter_positions = self._place_encounters(bsp, entry_pos, special_rooms_data)
+        special_rooms = self._process_special_rooms(bsp, floor_num)
+        special_positions = self._get_special_room_positions(special_rooms)
+        item_positions = self._place_items(bsp, entry_pos, exit_pos, boss_pos, special_positions)
+        encounter_positions = self._place_encounters(bsp, entry_pos)
 
         min_level = self.config.base_level + floor_num * self.config.level_increment
         max_level = min_level + self.config.level_increment
@@ -172,32 +184,8 @@ class CaveGenerator:
             max_level=max_level,
             is_boss_floor=is_boss_floor,
             bsp=bsp,
-            special_rooms=special_rooms_data
+            special_rooms=special_rooms
         )
-
-    def _create_special_room_data(self, bsp: BSPTree) -> list[SpecialRoomData]:
-        """Create SpecialRoomData for all special rooms."""
-        special_rooms = []
-
-        for room_type in [RoomType.TREASURE, RoomType.HEALING, RoomType.TRAP]:
-            for room in bsp.get_rooms_by_type(room_type):
-                pos = self._get_room_position(room, bsp.rng)
-
-                items = []
-                if room_type == RoomType.TREASURE:
-                    items = bsp.rng.choices(
-                        self.config.treasure_room_items,
-                        k=self.config.treasure_room_item_count
-                    )
-
-                special_rooms.append(SpecialRoomData(
-                    room=room,
-                    room_type=room_type,
-                    position=pos,
-                    items=items
-                ))
-
-        return special_rooms
 
     def _get_room_position(self, room: Optional[Room], rng: random.Random) -> tuple[int, int]:
         """Get a safe position within a room."""
@@ -218,30 +206,25 @@ class CaveGenerator:
     def _place_items(self, bsp: BSPTree, entry_pos: tuple[int, int],
                      exit_pos: Optional[tuple[int, int]],
                      boss_pos: Optional[tuple[int, int]],
-                     special_rooms: list[SpecialRoomData]) -> list[tuple[int, int, str]]:
-        """Place items randomly in the dungeon."""
+                     special_positions: set[tuple[int, int]]) -> list[tuple[int, int, str]]:
+        """Place items randomly in the dungeon, avoiding special rooms."""
         items = []
         excluded = {entry_pos}
+        excluded.update(special_positions)
         if exit_pos:
             excluded.add(exit_pos)
         if boss_pos:
             excluded.add(boss_pos)
-
-        for sr in special_rooms:
-            excluded.add(sr.position)
-
-        special_room_set = {sr.room for sr in special_rooms}
 
         num_items = bsp.rng.randint(
             self.config.items_per_floor_min,
             self.config.items_per_floor_max
         )
 
+        # Exclude special rooms from item placement
         available_rooms = [
-            r for r in bsp.rooms
-            if r.rect.width > 2 and r.rect.height > 2
-            and r not in special_room_set
-            and r.room_type == RoomType.NORMAL
+            r for r in bsp.rooms 
+            if r.rect.width > 2 and r.rect.height > 2 and not r.is_special
         ]
 
         for _ in range(num_items):
@@ -266,24 +249,85 @@ class CaveGenerator:
 
         return items
 
+    def _process_special_rooms(self, bsp: BSPTree, floor_num: int) -> list[SpecialRoom]:
+        """Process special rooms and populate their contents with floor-based difficulty."""
+        special_rooms = []
+        
+        # Calculate difficulty modifier (0.0 on first floor, 1.0 on last floor)
+        if self.config.num_floors > 1:
+            difficulty_modifier = floor_num / (self.config.num_floors - 1)
+        else:
+            difficulty_modifier = 0.0
+
+        for room in bsp.get_special_rooms():
+            center = room.rect.center
+            items = []
+
+            if room.room_type == RoomType.TREASURE:
+                items = self._generate_treasure_items(bsp, room, difficulty_modifier)
+
+            special_rooms.append(SpecialRoom(
+                room=room,
+                room_type=room.room_type,
+                center=center,
+                items=items,
+                difficulty_modifier=difficulty_modifier
+            ))
+
+        return special_rooms
+
+    def _generate_treasure_items(self, bsp: BSPTree, room: Room, 
+                                  difficulty: float) -> list[tuple[int, int, str]]:
+        """Generate treasure items based on floor difficulty."""
+        items = []
+        num_items = bsp.rng.randint(
+            self.config.treasure_item_count_min,
+            self.config.treasure_item_count_max
+        )
+        
+        # Higher floors have better chance for rare items
+        for _ in range(num_items):
+            roll = bsp.rng.random()
+            # Rare threshold decreases with difficulty (easier to get rare on deeper floors)
+            rare_threshold = 0.9 - (difficulty * 0.4)  # 0.9 -> 0.5
+            uncommon_threshold = 0.6 - (difficulty * 0.3)  # 0.6 -> 0.3
+            
+            if roll >= rare_threshold and self.config.treasure_items_rare:
+                item_name = bsp.rng.choice(self.config.treasure_items_rare)
+            elif roll >= uncommon_threshold and self.config.treasure_items_uncommon:
+                item_name = bsp.rng.choice(self.config.treasure_items_uncommon)
+            elif self.config.treasure_items_common:
+                item_name = bsp.rng.choice(self.config.treasure_items_common)
+            else:
+                # Fallback
+                item_name = "poketeball"
+            
+            x = bsp.rng.randint(room.rect.x + 1, max(room.rect.x + 1, room.rect.x2 - 2))
+            y = bsp.rng.randint(room.rect.y + 1, max(room.rect.y + 1, room.rect.y2 - 2))
+            items.append((x, y, item_name))
+        
+        return items
+
+    def _get_special_room_positions(self, special_rooms: list[SpecialRoom]) -> set[tuple[int, int]]:
+        """Get all positions occupied by special rooms."""
+        positions = set()
+        for special in special_rooms:
+            positions.add(special.center)
+            for x, y, _ in special.items:
+                positions.add((x, y))
+        return positions
+
     def _place_encounters(self, bsp: BSPTree,
-                          entry_pos: tuple[int, int],
-                          special_rooms: list[SpecialRoomData]) -> list[tuple[int, int]]:
+                          entry_pos: tuple[int, int]) -> list[tuple[int, int]]:
         """Place encounter zones (high grass equivalent)."""
         encounters = []
         grid = bsp.to_grid()
 
-        special_rects = [sr.room.rect for sr in special_rooms]
-
-        def in_special_room(x: int, y: int) -> bool:
-            return any(rect.contains(x, y) for rect in special_rects)
-
         for y in range(len(grid)):
             for x in range(len(grid[0])):
                 if grid[y][x] == '.' and (x, y) != entry_pos:
-                    if not in_special_room(x, y):
-                        if bsp.rng.random() < self.config.encounter_rate:
-                            encounters.append((x, y))
+                    if bsp.rng.random() < self.config.encounter_rate:
+                        encounters.append((x, y))
 
         return encounters
 
