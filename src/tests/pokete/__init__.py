@@ -1,1 +1,1 @@
-from .util import *
+"""Test package for pokete."""
