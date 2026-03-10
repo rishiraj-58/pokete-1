@@ -401,7 +401,7 @@ class CaveMap(PlayMap):
             self.register_obj("boss", boss)
 
     def _build_special_rooms(self):
-        """Build special room features."""
+        """Build special room features with floor-dependent difficulty."""
         for i, special in enumerate(self.layout.special_rooms):
             cx, cy = special.center
 
@@ -414,17 +414,19 @@ class CaveMap(PlayMap):
                 self.register_obj(f"treasure_{i}", chest)
 
             elif special.room_type == RoomType.HEALING:
+                # Use floor-specific healing percentage
                 fountain = HealingFountain(
                     f"cave_{self.layout.floor_num}_healing_{i}",
-                    self.config.healing_amount_percent
+                    self.layout.healing_percent
                 )
                 fountain.add(self, cx, cy)
                 self.register_obj(f"healing_{i}", fountain)
 
             elif special.room_type == RoomType.TRAP:
+                # Use floor-specific trap damage percentage
                 trap = TrapTile(
                     f"cave_{self.layout.floor_num}_trap_{i}",
-                    self.config.trap_damage_percent
+                    self.layout.trap_damage_percent
                 )
                 trap.add(self, cx, cy)
                 self.register_obj(f"trap_{i}", trap)
